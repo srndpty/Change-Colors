@@ -1,4 +1,4 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<!DOCTYPE html>
 <html>
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-15">
@@ -7,8 +7,9 @@
 <link rel="stylesheet" type="text/css" href="css/options.css" />
 <script type="text/javascript" src="options_manage.js"></script>
 <script type="text/javascript" src="libs/font_detect.js"></script>
+<script type="text/javascript" src="events.js"></script>
 </head>
-<body onload="restoreOptions();">
+<body>
   <div id="main_container">
     <div id="options_container">
       <div id="logo"><img src="icons/colors_icons_64.png" alt="Change Colors"/></div>
@@ -20,10 +21,8 @@
 	    <span class="group_option">Use Web pages fonts ?</span>
 	  </td>
 	  <td>
-	    Yes: <input type="radio" id="browserFontDefault"  name="browser_font" value="true"
-			onClick="fontRadioDefault();"/>
-	    No: <input type="radio" id="browserFontOverride" name="browser_font" value="false"
-		       onClick="fontRadioOverride();"/>
+	    Yes: <input type="radio" id="browserFontDefault"  name="browser_font" value="true" />
+	    No: <input type="radio" id="browserFontOverride" name="browser_font" value="false" />
 	  </td>
 	</tr>
 	<tr id="fontSelection" style="display: none;">
@@ -32,14 +31,10 @@
 	  </td>
 	  <td>
 	    <span id="default_font">Arial</span>&nbsp;
-	    <span id="fontSelectorBtn" onClick="showFonts();">(Use another font)</span>
+	    <span id="fontSelectorBtn">(Use another font)</span>
 	    <br />
 	    <div id="fontSelector" style="display: none;">
-	      <script type="text/javascript">
-		<!--
-		   document.write(buildFontSelector());
-		   // -->
-	      </script>
+	    
 	    </div>
 	  </td>
 	</tr>
@@ -49,10 +44,9 @@
 	  </td>
 	  <td>
 	    <input id="userCustomFont" type="text"
-	    name="userCustomFont" value="Enter a font name"
-	    onClick="this.value = '';" />
+	    name="userCustomFont" value="Enter a font name" />
 	    <input type="button" name="addUserCustomFont"
-	    value="Add" onClick="addFont();"/><br />
+	    value="Add"/><br />
 	    <span id="userFontMessage"></span>
 	  </td>
 	</tr>
@@ -60,12 +54,8 @@
 	  <td>
 	     Font size:
 	  </td>
-	  <td>
-	      <script type="text/javascript">
-		<!--
-		   document.write(buildFontSizeSelector());
-		   // -->
-	      </script>
+	  <td id="fontSizeContainer">
+	  
 	  </td>
 	</tr>
 	<tr class="group_option_row">
@@ -74,9 +64,9 @@
 	  </td>
 	  <td>
 	    Yes: <input type="radio" id="browserColorDefault"  name="browser_color" value="true"
-			onClick="colorRadioDefault();"/>
+			/>
 	    No: <input type="radio" id="browserColorOverride" name="browser_color" value="false"
-		       onClick="colorRadioOverride();"/>
+		       />
 	  </td>
 	</tr>
 	<tr id="background_color_row">
@@ -84,9 +74,7 @@
 	    <span>Background color:</span>
 	  </td>
 	  <td>
-	    <input class="color" id="background_color" value="0F0F0F"
-		   onchange="bindColor('background_color',
-			     'backgroundColor', 'sampleBlock')"/>
+	    <input class="color" id="background_color" value="0F0F0F" />
 	  </td>
 	</tr>
 	<tr id="text_color_row">
@@ -94,8 +82,7 @@
 	    <span>Text color:</span>
 	  </td>
 	  <td>
-	    <input class="color" id="text_color" value="EDEDED"
-		   onchange="bindColor('text_color', 'color', 'sampleBlock')"/>
+	    <input class="color" id="text_color" value="EDEDED" />
 	  </td>
 	</tr>
 	<tr id="links_color_row">
@@ -104,7 +91,7 @@
 	  </td>
 	  <td>
 	    <input class="color" id="links_color" value="42ADDB"
-		   onchange="bindColor('links_color', 'color', 'link')"/>
+		   />
 	  </td>
 	</tr>
 	<tr id="visited_links_color_row">
@@ -113,7 +100,7 @@
 	  </td>
 	  <td>
 	    <input class="color" id="visited_links_color" value="5B3BDB"
-		   onchange="bindColor('visited_links_color', 'color', 'visited_link')"/>
+		   />
 	  </td>
 	</tr>
 	<tr class="group_option_row">
@@ -122,9 +109,9 @@
 	  </td>
 	  <td>
 	    Yes: <input type="radio" id="showImageDefault" name="browser_show_image" value="true"
-	    onClick="saveOption('ShowImage', true);"/>
+	    />
 	    No: <input type="radio" id="showImageOverride" name="browser_show_image" value="false"
-	    onClick="saveOption('ShowImage', false);"/>
+	    />
 	  </td>
 	</tr>
 	<tr class="group_option_row">
@@ -133,9 +120,9 @@
 	  </td>
 	  <td>
 	    Yes: <input type="radio" id="showFlashDefault" name="browser_show_flash" value="true"
-	    onClick="saveOption('ShowFlash', true);"/>
+	    />
 	    No: <input type="radio" id="showFlashOverride" name="browser_show_flash" value="false"
-	    onClick="saveOption('ShowFlash', false);"/>
+	    />
 	  </td>
 	</tr>	
       </table>
