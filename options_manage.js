@@ -52,11 +52,11 @@ function restoreOptionValue(elementId){
 function radioCheck(optionName, defaultElementId, overrideElementId){
     if(loadOption(optionName)){
 	document.getElementById(defaultElementId).checked = true;
-	document.getElementById(defaultElementId).onclick();
+	document.getElementById(defaultElementId).click();
     }
     else{
 	document.getElementById(overrideElementId).checked = true;
-	document.getElementById(overrideElementId).onclick();
+	document.getElementById(overrideElementId).click();
     }
 }
 

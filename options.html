@@ -5,9 +5,11 @@
 <title>Change Colors: Adjust your preferences</title>
 
 <link rel="stylesheet" type="text/css" href="css/options.css" />
+<script type="text/javascript" src="jquery.min.js"></script>
 <script type="text/javascript" src="options_manage.js"></script>
 <script type="text/javascript" src="libs/font_detect.js"></script>
 <script type="text/javascript" src="events.js"></script>
+<script type="text/javascript" src="libs/jscolor/jscolor.js"></script>
 </head>
 <body>
   <div id="main_container">
@@ -45,7 +47,7 @@
 	  <td>
 	    <input id="userCustomFont" type="text"
 	    name="userCustomFont" value="Enter a font name" />
-	    <input type="button" name="addUserCustomFont"
+	    <input type="button" id="addUserCustomFont" name="addUserCustomFont"
 	    value="Add"/><br />
 	    <span id="userFontMessage"></span>
 	  </td>
@@ -74,7 +76,7 @@
 	    <span>Background color:</span>
 	  </td>
 	  <td>
-	    <input class="color" id="background_color" value="0F0F0F" />
+	    <input type="text" class="color" id="background_color" value="0F0F0F" />
 	  </td>
 	</tr>
 	<tr id="text_color_row">
@@ -82,7 +84,7 @@
 	    <span>Text color:</span>
 	  </td>
 	  <td>
-	    <input class="color" id="text_color" value="EDEDED" />
+	    <input type="text" class="color" id="text_color" value="EDEDED" />
 	  </td>
 	</tr>
 	<tr id="links_color_row">
@@ -90,7 +92,7 @@
 	    <span>Links color:</span>      
 	  </td>
 	  <td>
-	    <input class="color" id="links_color" value="42ADDB"
+	    <input type="text" class="color" id="links_color" value="42ADDB"
 		   />
 	  </td>
 	</tr>
@@ -99,7 +101,7 @@
 	    <span>Visited links color:</span>      
 	  </td>
 	  <td>
-	    <input class="color" id="visited_links_color" value="5B3BDB"
+	    <input type="text" class="color" id="visited_links_color" value="5B3BDB"
 		   />
 	  </td>
 	</tr>
@@ -149,5 +151,4 @@
     <div class="clear"></div>
   </div>
 </body>
-<script type="text/javascript" src="libs/jscolor/jscolor.js"></script>
 </html>
