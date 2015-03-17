@@ -114,37 +114,37 @@ function buildFontSelector(){
     var FontDetector = new Detector();
     for(h = 0; h < customFonts.length; h++){
 	FontSelectorString += '<div  id="UserFont_'+h+'" class="UserFontDiv"' +
-	                      'onMouseOver="customFontSelected('+ h +');" ' +
-	                      'onMouseOut="hideCustomFontSelected('+h+');" '+ 
-	                      'onClick="setFont(\''+ customFonts[h] +'\');" '+
                               'style="font-family: '+ customFonts[h] +'">' + 
 	                      '<div class="customFontInnerDiv">' +
 	                      customFonts[h] +
 	                      '</div>' +
 	                      '<div id="customFontRemove_'+h+'" '+
 	                      'class="customFontRemove" ' +
-                              'onClick="removeFont('+h+');" '+
                               'style="display: none;">' +
 	                      '</div>'+
 	                      '<div class="clear"></div>'+
 	                      '</div>';
+		
     }
     for(i = 0; i < fonts.length; i++){
 	var testFont = FontDetector.test(fonts[i]);
 	if(testFont == true)
-	    FontSelectorString += '<div class="SingleFontDiv" onClick="setFont(\''+ fonts[i] +'\');" style="font-family: '+ fonts[i] +'">' + fonts[i] + '</div>';
+	    FontSelectorString += '<div class="SingleFontDiv" style="font-family: '+ fonts[i] +'">' + fonts[i] + '</div>';
     }
     FontSelectorString += '</div>'
     return FontSelectorString;
 }
 
 function buildFontSizeSelector(){
-    var FontSizeSelectorString = '<select id="fontSize" name="fontSize" onchange="setFontSize(this.value);">';
+    var FontSizeSelectorString = '<select id="fontSize" name="fontSize">';
     FontSizeSelectorString += '<option id="fontSizeOption_0" value="0">Web page\'s font size</option>'; 
     for(i = 1; i <= 32; i++){
-	FontSizeSelectorString += '<option id="fontSizeOption_'+ i +'" value="' + i + '">' + i + ' pt</option>'; 
+    	FontSizeSelectorString += '<option id="fontSizeOption_'+ i +'" value="' + i + '">' + i + ' pt</option>'; 
     }
     FontSizeSelectorString += '</select>';
+    
+    
+    
     return FontSizeSelectorString;
 }
 

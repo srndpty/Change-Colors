@@ -86,20 +86,31 @@ function CurrentPage ()
 	setDefaultOption("OverrideFontName", "Arial");
     }
 
-    me.updatePageAction = function(tabId){
-	chrome.tabs.get(tabId, function (tab){
-	    me.CurrentTabId = tabId;
-	    me.Url = tab.url;
-	    me.Domain = extractDomain(tab.url);
-	    if(me.isStyleOverriden()){
-		me.callInjectCss();
-		me.displayOverriden(tabId);
-	    }
-	       else
-		   me.displayDefault(tabId);
-
-	       chrome.pageAction.show(tabId);
-	});
+    me.updatePageAction = function(object){
+    	var tabId;
+    	if(typeof object.tabId != "undefined") {
+    		tabId = object.tabId;
+    	}
+    	else if(typeof object.id != "undefined") {
+    		tabId = object.id;
+    	}
+    	else {
+    		tabId = object;
+    	}
+    	 
+		chrome.tabs.get(tabId, function (tab){
+		    me.CurrentTabId = tabId;
+		    me.Url = tab.url;
+		    me.Domain = extractDomain(tab.url);
+		    if(me.isStyleOverriden()){
+			me.callInjectCss();
+			me.displayOverriden(tabId);
+		    }
+		       else
+			   me.displayDefault(tabId);
+	
+		       chrome.pageAction.show(tabId);
+		});
 
     }
 
@@ -187,7 +198,23 @@ function setDefaultOption(optionName, value){
 
 var objCurrentPage = new CurrentPage;
 
-chrome.tabs.onSelectionChanged.addListener(objCurrentPage.updatePageAction);
+
+
+chrome.webNavigation.onCommitted.addListener(function(o) {
+	if(localStorage["OverrideAll"] == "true") {
+		var backgroundColor = '#' + loadOption("background_color");
+    	chrome.tabs.insertCSS(o.tabId, {
+    	  code: "html, body { background-color: " + backgroundColor +  " !important; }",
+    	  runAt : "document_start"
+    	});
+    	me.displayOverriden(me.CurrentTabId);
+	}
+    else {
+    	me.displayDefault(me.CurrentTabId);
+    }
+});
+chrome.tabs.onCreated.addListener(objCurrentPage.updatePageAction);
+chrome.tabs.onActivated.addListener(objCurrentPage.updatePageAction);
 chrome.tabs.onUpdated.addListener(objCurrentPage.updatePageAction);
 
 

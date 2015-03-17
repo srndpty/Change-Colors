@@ -21,12 +21,12 @@
 	"content_scripts": [
 		{
 			"run_at": "document_start",
-			"matches": ["http://*/*", "https://*/*", "ftp://*/*", "file://*/*"],
+			"matches": ["<all_urls>"],
 			"js": ["convert.js"],
 			"all_frames": true
 		}
 	],
-	"minimum_chrome_version": "4.0",
+	"minimum_chrome_version": "33.0",
 	"options_page": "options.html",
-	"permissions": ["tabs", "http://*/*", "https://*/*"]
+	"permissions": ["tabs", "webNavigation", "http://*/*", "https://*/*", "<all_urls>"]
 }

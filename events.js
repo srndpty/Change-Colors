@@ -66,7 +66,32 @@ jQuery(document).ready(function() {
 
 	$("#fontSelector").html(buildFontSelector());
 	$("#fontSizeContainer").html(buildFontSizeSelector());
-
+	
+	
+	jQuery(".UserFontDiv").on("mouseover", function() {
+		var fontId = $(this).attr("id").split("_")[1];
+		customFontSelected(fontId);
+	});
+	jQuery(".UserFontDiv").on("mouseout", function() {
+		var fontId = $(this).attr("id").split("_")[1];
+		hideCustomFontSelected(fontId);
+	});
+	jQuery(".UserFontDiv").on("click", function() {
+		var fontId = $(this).attr("id").split("_")[1];
+		setFont("'" + customFonts[fontId] + "'");
+	});
+	jQuery(".customFontRemove").on("click", function() {
+		var fontId = $(this).attr("id").split("_")[1];
+		removeFont(fontId);
+	});
+	
+	$("#fontSize").on("change", function() {
+    	setFontSize($(this).val());
+	});
+	
+	$(".SingleFontDiv").on("click", function() {
+		setFont("'" + $(this).text() + "'");
+	});
 });
 	
 	
