@@ -200,20 +200,18 @@ var objCurrentPage = new CurrentPage;
 
 
 
-chrome.webNavigation.onCommitted.addListener(function(o) {
-	if(localStorage["OverrideAll"] == "true") {
-		var backgroundColor = '#' + loadOption("background_color");
-    	chrome.tabs.insertCSS(o.tabId, {
-    	  code: "html, body { background-color: " + backgroundColor +  " !important; }",
-    	  runAt : "document_start"
-    	});
-    	me.displayOverriden(me.CurrentTabId);
-	}
-    else {
-    	me.displayDefault(me.CurrentTabId);
-    }
+chrome.webNavigation.onCommitted.addListener(function(tab) {
+	objCurrentPage.CurrentTabId = tab.tabId;
+	objCurrentPage.Url = tab.url;
+	objCurrentPage.Domain = extractDomain(tab.url);
+    if(objCurrentPage.isStyleOverriden()) {
+	    var backgroundColor = '#' + loadOption("background_color");
+	    chrome.tabs.insertCSS(tab.tabId, {
+	      code: "html, body { background-color: " + backgroundColor +  " !important; }",
+	      runAt : "document_start"
+	    });
+    } 
 });
-chrome.tabs.onCreated.addListener(objCurrentPage.updatePageAction);
 chrome.tabs.onActivated.addListener(objCurrentPage.updatePageAction);
 chrome.tabs.onUpdated.addListener(objCurrentPage.updatePageAction);
 
