@@ -1,3 +1,8 @@
 This is improved version of Change Colors.
 
+Release note: 
+
+- Migrated to manifest v2.
+- Reduce flashing when navigate to other website.
+
 Original source: https://github.com/Strav/Change-Colors
