@@ -113,6 +113,19 @@ function CurrentPage ()
 		});
 
     }
+    
+    me.updatePageActionWithBackgroundOnly = function(tab) {
+    	me.CurrentTabId = tab.tabId;
+    	me.Url = tab.url;
+    	me.Domain = extractDomain(tab.url);
+        if(me.isStyleOverriden()) {
+    	    var backgroundColor = '#' + loadOption("background_color");
+    	    chrome.tabs.insertCSS(tab.tabId, {
+    	      code: "html, body { background-color: " + backgroundColor +  " !important; }",
+    	      runAt : "document_start"
+    	    });
+        } 
+    }
 
     me.displayDefault = function(tabId){
 	chrome.pageAction.setIcon({tabId: tabId, path: "icons/colors_icons_grey.png"});
@@ -200,18 +213,7 @@ var objCurrentPage = new CurrentPage;
 
 
 
-chrome.webNavigation.onCommitted.addListener(function(tab) {
-	objCurrentPage.CurrentTabId = tab.tabId;
-	objCurrentPage.Url = tab.url;
-	objCurrentPage.Domain = extractDomain(tab.url);
-    if(objCurrentPage.isStyleOverriden()) {
-	    var backgroundColor = '#' + loadOption("background_color");
-	    chrome.tabs.insertCSS(tab.tabId, {
-	      code: "html, body { background-color: " + backgroundColor +  " !important; }",
-	      runAt : "document_start"
-	    });
-    } 
-});
+chrome.webNavigation.onCommitted.addListener(objCurrentPage.updatePageActionWithBackgroundOnly);
 chrome.tabs.onActivated.addListener(objCurrentPage.updatePageAction);
 chrome.tabs.onUpdated.addListener(objCurrentPage.updatePageAction);
 
