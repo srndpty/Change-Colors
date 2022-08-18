@@ -1,6 +1,8 @@
+const SS = chrome.storage.local;
+
 function CurrentPage ()
 {
-    var me = this;
+	var me = this;
 
     me.blnOverrides = {'OverridenDomains' : null,
 			 'OverridenPages' : null,
@@ -19,12 +21,12 @@ function CurrentPage ()
     me.Domain;
     me.CurrentTabId;
 
-    me.getOverrides = function (){
-	me.Overrides['OverridenDomains'] = JSON.parse(localStorage["OverridenDomains"]);
-	me.Overrides['OverridenPages'] = JSON.parse(localStorage["OverridenPages"]);
-	me.Overrides['NotOverridenDomains'] = JSON.parse(localStorage["NotOverridenDomains"]);
-	me.Overrides['NotOverridenPages'] = JSON.parse(localStorage["NotOverridenPages"]);
-	me.Overrides['OverrideAll'] = JSON.parse(localStorage["OverrideAll"]);
+    me.getOverrides = () => {
+    	SS.get(['OverridenDomains'], result => me.Overrides["OverridenDomains"] = result);
+    	SS.get(['OverridenPages'], result => me.Overrides["OverridenPages"] = result);
+    	SS.get(['NotOverridenDomains'], result => me.Overrides["NotOverridenDomains"] = result);
+    	SS.get(['NotOverridenPages'], result => me.Overrides["NotOverridenPages"] = result);
+    	SS.get(['OverrideAll'], result => me.Overrides["OverrideAll"] = result);
     }
 
     me.callInjectCss = function (){	
@@ -37,7 +39,9 @@ function CurrentPage ()
     }
 
     me.setIsOverridenOrNot =  function (path, overrideType){
-	me.blnOverrides[overrideType] = me.Overrides[overrideType].indexOf(path) != -1;
+    	console.log("path: " + path + ", string: " + JSON.stringify(me.Overrides[overrideType]));
+    	console.log(me.Overrides[overrideType]);
+		me.blnOverrides[overrideType] = String(me.Overrides[overrideType]).indexOf(path) != -1;
     }
 
     me.manageOverride = function (overrideType, blnValue, localStorageValue, action, CSSfn){
@@ -52,7 +56,7 @@ function CurrentPage ()
 	    me.Overrides[overrideType] = localStorageValue;
 	    break;
 	}
-	localStorage[overrideType]  = JSON.stringify(me.Overrides[overrideType]);
+	SS.set({overrideType: JSON.stringify(me.Overrides[overrideType])});
 	me.blnOverrides[overrideType] = blnValue;
 	CSSfn();
     }
@@ -99,17 +103,18 @@ function CurrentPage ()
     	}
     	 
 		chrome.tabs.get(tabId, function (tab){
-		    me.CurrentTabId = tabId;
-		    me.Url = tab.url;
-		    me.Domain = extractDomain(tab.url);
-		    if(me.isStyleOverriden()){
-			me.callInjectCss();
-			me.displayOverriden(tabId);
-		    }
-		       else
-			   me.displayDefault(tabId);
-	
-		       chrome.pageAction.show(tabId);
+			me.CurrentTabId = tabId;
+			me.Url = tab.url;
+			me.Domain = extractDomain(tab.url);
+			if(me.isStyleOverriden()){
+				me.callInjectCss();
+				me.displayOverriden(tabId);
+			}
+			else{
+				me.displayDefault(tabId);
+			}
+
+			// chrome.action.show(tabId);
 		});
 
     }
@@ -120,20 +125,20 @@ function CurrentPage ()
     	me.Domain = extractDomain(tab.url);
         if(me.isStyleOverriden()) {
     	    var backgroundColor = '#' + loadOption("background_color");
-    	    chrome.tabs.insertCSS(tab.tabId, {
-    	      code: "html, body { background-color: " + backgroundColor +  " !important; }",
-    	      runAt : "document_start"
+    	    chrome.scripting.insertCSS({
+	    	    target: {tabId: tab.tabId},
+	      		css: "html, body { background-color: " + backgroundColor +  " !important; }"
     	    });
         } 
     }
 
     me.displayDefault = function(tabId){
-	chrome.pageAction.setIcon({tabId: tabId, path: "icons/colors_icons_grey.png"});
+	chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons_grey.png"});
     }
 
 
     me.displayOverriden = function(tabId){
-	chrome.pageAction.setIcon({tabId: tabId, path: "icons/colors_icons.png"});
+	chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons.png"});
     }
 
 
@@ -196,21 +201,24 @@ function extractDomain(url){
 }
 
 function loadOption(optionName){
-    return JSON.parse(localStorage[optionName]);   
+    return SS.get(optionName);
 }
 
 function saveOption(optionName, optionValue){
-    localStorage[optionName]  = JSON.stringify(optionValue);    
+    SS.set({optionName: JSON.stringify(optionValue)});
 }
 
 function setDefaultOption(optionName, value){
-    if(localStorage[optionName] == undefined){
-	saveOption(optionName, value);
+    if(SS.get(optionName) == undefined){
+		saveOption(optionName, value);
     }
 }
 
 var objCurrentPage = new CurrentPage;
 
+function FetchCurrentPage(){
+	objCurrentPage = new CurrentPage;
+}
 
 
 chrome.webNavigation.onCommitted.addListener(objCurrentPage.updatePageActionWithBackgroundOnly);
@@ -218,7 +226,7 @@ chrome.tabs.onActivated.addListener(objCurrentPage.updatePageAction);
 chrome.tabs.onUpdated.addListener(objCurrentPage.updatePageAction);
 
 
-chrome.extension.onMessage.addListener(
+chrome.runtime.onMessage.addListener(
   function(request, sender, sendResponse) {
       switch(request.shortCut){
       case "overridePage":

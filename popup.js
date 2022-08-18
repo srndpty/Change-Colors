@@ -1,14 +1,24 @@
-var BackgroundPage = chrome.extension.getBackgroundPage();
-var objCurrentPage = BackgroundPage.objCurrentPage;
+function Prepare(){
+	console.log("Prepare");
+	FetchCurrentPage();
+
+	DisplayButtons();
+}
 
 function ChangeBtnState(BtnId, BtnText, overrideType, blnOverriden, localStorageValue, addOrRemove, overrideFn){
+	console.log("ChangeBtnState" + BtnId + " " + BtnText + " " + overrideType + " " + blnOverriden + " " + localStorageValue + " " + addOrRemove + " " + overrideFn);
+
     var btn = document.getElementById(BtnId);
     btn.innerHTML = BtnText;
-    btn.onclick = function(){objCurrentPage.manageOverride.call(this, overrideType, blnOverriden, localStorageValue, addOrRemove, overrideFn); DisplayButtons();};
+    btn.onclick = function(){
+    	objCurrentPage.manageOverride.call(this, overrideType, blnOverriden, localStorageValue, addOrRemove, overrideFn); 
+    	DisplayButtons();
+    };
 }
 
 function DisplayButtons(){
-    var objPageOverrides = BackgroundPage.objCurrentPage.blnOverrides;
+	console.log("DisplayButtons");
+    var objPageOverrides = objCurrentPage.blnOverrides;
     var currentUrl = objCurrentPage.Url;
     var currentDomain = objCurrentPage.Domain;
 
@@ -47,4 +57,4 @@ function DisplayButtons(){
     }
 }
 
-window.addEventListener("load", DisplayButtons);
+window.addEventListener("load", Prepare);
