@@ -12,7 +12,7 @@ function removeCss(){
     history.go(0);
 }
 
-chrome.extension.onMessage.addListener(function(request, sender, sendResponse) {
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     if (request.action == "injectCss") {
 	injectCss(request.css);
     } else if (request.action == "removeCss") {
@@ -248,13 +248,13 @@ shortcut = {
 /****************************/
 
 shortcut.add("Ctrl+Shift+P",function() {
-    chrome.extension.sendMessage({shortCut: "overridePage"}, function(response){});    
+    chrome.runtime.sendMessage({shortCut: "overridePage"}, function(response){});    
 });
 
 shortcut.add("Ctrl+Shift+D",function() {
-    chrome.extension.sendMessage({shortCut: "overrideDomain"}, function(response){});
+    chrome.runtime.sendMessage({shortCut: "overrideDomain"}, function(response){});
 });
 
 shortcut.add("Ctrl+Shift+G",function() {
-    chrome.extension.sendMessage({shortCut: "overrideAll"}, function(response){});    
+    chrome.runtime.sendMessage({shortCut: "overrideAll"}, function(response){});    
 });

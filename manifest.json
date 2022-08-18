@@ -1,7 +1,7 @@
 {
-	"manifest_version": 2,
+	"manifest_version": 3,
 	"name": "Change Colors",
-	"version": "2.244",
+	"version": "3.0",
 	"description": "Change pages styling according to the user's preferences.",
 	"icons": {
 		"16": "icons/colors_icons.png",
@@ -9,14 +9,13 @@
 		"48": "icons/colors_icons.png",
 		"128": "icons/colors_icons.png"
 	},
-	"page_action": {
+	"action": {
 		"default_icon": "icons/colors_icons.png",
 		"default_title": "Change Colors",
 		"default_popup": "popup.html"
 	},
 	"background": {
-		"scripts" : ["background_page.js"],
-		"persistent" : false
+		"service_worker" : "background_page.js"
 	},
 	"content_scripts": [
 		{
@@ -28,5 +27,13 @@
 	],
 	"minimum_chrome_version": "33.0",
 	"options_page": "options.html",
-	"permissions": ["tabs", "webNavigation", "http://*/*", "https://*/*", "<all_urls>"]
+	"permissions": [
+		"tabs", 
+		"webNavigation",
+		"storage",
+		"scripting"
+	],
+	"host_permissions": [
+		"<all_urls>"
+	]
 }
