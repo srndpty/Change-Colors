@@ -5,13 +5,15 @@
 //   removeItems: keys => chrome.storage.local.remove(keys),
 // };
 
-const SS = chrome.storage.sync;
+const SS = chrome.storage.local;
 
 function CurrentPage ()
 {
 	console.log("function CurrentPage");
 
-    this.blnOverrides = 
+	let me = this;
+
+    me.blnOverrides = 
     {
 		'OverridenDomains' : null,
 		'OverridenPages' : null,
@@ -20,7 +22,7 @@ function CurrentPage ()
 		'OverrideAll': null
 	}
 
-    this.Overrides = 
+    me.Overrides = 
     {
 		'OverridenDomains' : new Array(), 
 		'OverridenPages' : new Array(), 
@@ -29,58 +31,67 @@ function CurrentPage ()
 		'OverrideAll' : null
      }
 
-    this.Url;
-    this.Domain;
-    this.CurrentTabId;
+    me.Url;
+    me.Domain;
+    me.CurrentTabId;
 
-    this.getOverrides = function (){
-		this.Overrides["OverridenDomains"] = SS.get('OverridenDomains');
-		this.Overrides['OverridenPages'] = SS.get("OverridenPages");
-		this.Overrides['NotOverridenDomains'] = SS.get("NotOverridenDomains");
-		this.Overrides['NotOverridenPages'] = SS.get("NotOverridenPages");
-		this.Overrides['OverrideAll'] = SS.get("OverrideAll");
+    me.getOverrides = () => {
+    	SS.get(['OverridenDomains'], result => me.Overrides["OverridenDomains"] = result);
+    	SS.get(['OverridenPages'], result => me.Overrides["OverridenPages"] = result);
+    	SS.get(['NotOverridenDomains'], result => me.Overrides["NotOverridenDomains"] = result);
+    	SS.get(['NotOverridenPages'], result => me.Overrides["NotOverridenPages"] = result);
+    	SS.get(['OverrideAll'], result => me.Overrides["OverrideAll"] = result);
+		// me.Overrides["OverridenDomains"] = (await SS.get('OverridenDomains')) ?? {};
+		// me.Overrides['OverridenPages'] = (await SS.get("OverridenPages")) ?? {};
+		// me.Overrides['NotOverridenDomains'] = (await SS.get("NotOverridenDomains")) ?? {};
+		// me.Overrides['NotOverridenPages'] = (await SS.get("NotOverridenPages")) ?? {};
+		// me.Overrides['OverrideAll'] = (await SS.get("OverrideAll")) ?? {};
     }
 
-    this.callInjectCss = function (){	
-		chrome.tabs.sendMessage(this.CurrentTabId, {action: "injectCss", css: this.CssToInject} , null);
-		this.displayOverriden(this.CurrentTabId);
+    me.callInjectCss = function (){	
+		chrome.tabs.sendMessage(me.CurrentTabId, {action: "injectCss", css: me.CssToInject} , null);
+		me.displayOverriden(me.CurrentTabId);
     }
 
-    this.callRemoveCss = function (){
-		chrome.tabs.sendMessage(this.CurrentTabId, {action: "removeCss"}, null);
+    me.callRemoveCss = function (){
+		chrome.tabs.sendMessage(me.CurrentTabId, {action: "removeCss"}, null);
     }
 
-    this.setIsOverridenOrNot =  function (path, overrideType){
-		this.blnOverrides[overrideType] = this.Overrides[overrideType].indexOf(path) != -1;
+    me.setIsOverridenOrNot =  function (path, overrideType){
+    	console.log("path: " + path + ", string: " + JSON.stringify(me.Overrides[overrideType]));
+    	console.log(me.Overrides[overrideType]);
+		me.blnOverrides[overrideType] = String(me.Overrides[overrideType]).indexOf(path) != -1;
     }
 
-    this.manageOverride = function (overrideType, blnValue, localStorageValue, action, CSSfn){
+    me.manageOverride = function (overrideType, blnValue, localStorageValue, action, CSSfn){
 		switch(action){
 		case 'add':
-		    this.Overrides[overrideType].push(localStorageValue);
+		    me.Overrides[overrideType].push(localStorageValue);
 		    break;
 		case 'remove':
-		    this.Overrides[overrideType].splice(this.Overrides[overrideType].indexOf(localStorageValue),1);
+		    me.Overrides[overrideType].splice(me.Overrides[overrideType].indexOf(localStorageValue),1);
 		    break;
 		case 'set':
-		    this.Overrides[overrideType] = localStorageValue;
+		    me.Overrides[overrideType] = localStorageValue;
 		    break;
 		}
-		SS.set({overrideType: JSON.stringify(this.Overrides[overrideType])});
-		this.blnOverrides[overrideType] = blnValue;
+		SS.set({overrideType: JSON.stringify(me.Overrides[overrideType])});
+		me.blnOverrides[overrideType] = blnValue;
 		CSSfn();
     }
 
-    this.isStyleOverriden = function(){
-		this.setIsOverridenOrNot(this.Url, 'NotOverridenPages');
-		this.setIsOverridenOrNot(this.Domain, 'NotOverridenDomains');
-		this.setIsOverridenOrNot(this.Url, 'OverridenPages');
-		this.setIsOverridenOrNot(this.Domain, 'OverridenDomains');
-		this.blnOverrides['OverrideAll'] = loadOption('OverrideAll');
-		return (this.blnOverrides['OverrideAll'] && !(this.blnOverrides['NotOverridenPages'] || this.blnOverrides['NotOverridenDomains'])) || this.blnOverrides['OverridenPages'] || this.blnOverrides['OverridenDomains'];
+    me.isStyleOverriden = function(){
+		me.setIsOverridenOrNot(me.Url, 'NotOverridenPages');
+		me.setIsOverridenOrNot(me.Domain, 'NotOverridenDomains');
+		me.setIsOverridenOrNot(me.Url, 'OverridenPages');
+		me.setIsOverridenOrNot(me.Domain, 'OverridenDomains');
+		me.blnOverrides['OverrideAll'] = loadOption('OverrideAll');
+		return (me.blnOverrides['OverrideAll'] && !(me.blnOverrides['NotOverridenPages'] || me.blnOverrides['NotOverridenDomains'])) || 
+			me.blnOverrides['OverridenPages'] || 
+			me.blnOverrides['OverridenDomains'];
     }
 
-    this.setDefaults = function(){
+    me.setDefaults = function(){
 		setDefaultOption("OverridenDomains", new Array());
 		setDefaultOption("OverridenPages", new Array());
 		setDefaultOption("NotOverridenDomains", new Array());
@@ -100,7 +111,7 @@ function CurrentPage ()
 		setDefaultOption("OverrideFontName", "Arial");
     }
 
-    this.updatePageAction = function(object){
+    me.updatePageAction = function(object){
     	var tabId;
     	if(typeof object.tabId != "undefined") {
     		tabId = object.tabId;
@@ -113,45 +124,46 @@ function CurrentPage ()
     	}
     	 
 		chrome.tabs.get(tabId, function (tab){
-		    this.CurrentTabId = tabId;
-		    this.Url = tab.url;
-		    this.Domain = extractDomain(tab.url);
-		    if(this.isStyleOverriden()){
-			this.callInjectCss();
-			this.displayOverriden(tabId);
-		    }
-		       else
-			   this.displayDefault(tabId);
-	
-		       chrome.action.show(tabId);
+			me.CurrentTabId = tabId;
+			me.Url = tab.url;
+			me.Domain = extractDomain(tab.url);
+			if(me.isStyleOverriden()){
+				me.callInjectCss();
+				me.displayOverriden(tabId);
+			}
+			else{
+				me.displayDefault(tabId);
+			}
+
+			// chrome.action.show(tabId);
 		});
 
     }
     
-    this.updatePageActionWithBackgroundOnly = function(tab) {
-    	this.CurrentTabId = tab.tabId;
-    	this.Url = tab.url;
-    	this.Domain = extractDomain(tab.url);
-        if(this.isStyleOverriden()) {
+    me.updatePageActionWithBackgroundOnly = function(tab) {
+    	me.CurrentTabId = tab.tabId;
+    	me.Url = tab.url;
+    	me.Domain = extractDomain(tab.url);
+        if(me.isStyleOverriden()) {
     	    var backgroundColor = '#' + loadOption("background_color");
-    	    chrome.tabs.insertCSS(tab.tabId, {
-    	      code: "html, body { background-color: " + backgroundColor +  " !important; }",
-    	      runAt : "document_start"
+    	    chrome.scripting.insertCSS({
+	    	    target: {tabId: tab.tabId},
+	      		css: "html, body { background-color: " + backgroundColor +  " !important; }"
     	    });
         } 
     }
 
-    this.displayDefault = function(tabId){
+    me.displayDefault = function(tabId){
 		chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons_grey.png"});
     }
 
 
-    this.displayOverriden = function(tabId){
+    me.displayOverriden = function(tabId){
 		chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons.png"});
     }
 
 
-    this.buildCssToInject = function(){
+    me.buildCssToInject = function(){
 		var backgroundColor = '#' + loadOption("background_color");
 		var textColor = '#' + loadOption("text_color");
 		var linksColor = '#' + loadOption("links_color");
@@ -197,12 +209,12 @@ function CurrentPage ()
 		if(!showFlash){
 		    css += 'html > body object { display:none !important;}';
 		}
-		this.CssToInject = css;
+		me.CssToInject = css;
     }
 
-    this.setDefaults();
-    this.getOverrides();
-    this.buildCssToInject();
+    me.setDefaults();
+    me.getOverrides();
+    me.buildCssToInject();
 }
 
 function extractDomain(url){

@@ -1,10 +1,13 @@
 function Prepare(){
+	console.log("Prepare");
 	FetchCurrentPage();
 
 	DisplayButtons();
 }
 
 function ChangeBtnState(BtnId, BtnText, overrideType, blnOverriden, localStorageValue, addOrRemove, overrideFn){
+	console.log("ChangeBtnState" + BtnId + " " + BtnText + " " + overrideType + " " + blnOverriden + " " + localStorageValue + " " + addOrRemove + " " + overrideFn);
+
     var btn = document.getElementById(BtnId);
     btn.innerHTML = BtnText;
     btn.onclick = function(){
@@ -14,7 +17,8 @@ function ChangeBtnState(BtnId, BtnText, overrideType, blnOverriden, localStorage
 }
 
 function DisplayButtons(){
-    var objPageOverrides = BackgroundPage.objCurrentPage.blnOverrides;
+	console.log("DisplayButtons");
+    var objPageOverrides = objCurrentPage.blnOverrides;
     var currentUrl = objCurrentPage.Url;
     var currentDomain = objCurrentPage.Domain;
 
