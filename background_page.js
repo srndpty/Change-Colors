@@ -1,35 +1,21 @@
-// const LS = {
-//   getAllItems: () => chrome.storage.local.get(),
-//   getItem: async key => (await chrome.storage.local.get(key))[key],
-//   setItem: (key, val) => chrome.storage.local.set({[key]: val}),
-//   removeItems: keys => chrome.storage.local.remove(keys),
-// };
-
 const SS = chrome.storage.local;
 
 function CurrentPage ()
 {
-	console.log("function CurrentPage");
+	var me = this;
 
-	let me = this;
-
-    me.blnOverrides = 
-    {
-		'OverridenDomains' : null,
-		'OverridenPages' : null,
-		'NotOverridenPages' : null,
-		'NotOverridenDomains' : null,
-		'OverrideAll': null
-	}
-
-    me.Overrides = 
-    {
-		'OverridenDomains' : new Array(), 
-		'OverridenPages' : new Array(), 
-		'NotOverridenPages' : new Array(), 
-		'NotOverridenDomains' : new Array(), 
-		'OverrideAll' : null
-     }
+    me.blnOverrides = {'OverridenDomains' : null,
+			 'OverridenPages' : null,
+			 'NotOverridenPages' : null,
+			 'NotOverridenDomains' : null,
+			 'OverrideAll': null
+			}
+    me.Overrides = {'OverridenDomains' : new Array(), 
+		      'OverridenPages' : new Array(), 
+		      'NotOverridenPages' : new Array(), 
+		      'NotOverridenDomains' : new Array(), 
+		      'OverrideAll' : null
+		     }
 
     me.Url;
     me.Domain;
@@ -41,20 +27,15 @@ function CurrentPage ()
     	SS.get(['NotOverridenDomains'], result => me.Overrides["NotOverridenDomains"] = result);
     	SS.get(['NotOverridenPages'], result => me.Overrides["NotOverridenPages"] = result);
     	SS.get(['OverrideAll'], result => me.Overrides["OverrideAll"] = result);
-		// me.Overrides["OverridenDomains"] = (await SS.get('OverridenDomains')) ?? {};
-		// me.Overrides['OverridenPages'] = (await SS.get("OverridenPages")) ?? {};
-		// me.Overrides['NotOverridenDomains'] = (await SS.get("NotOverridenDomains")) ?? {};
-		// me.Overrides['NotOverridenPages'] = (await SS.get("NotOverridenPages")) ?? {};
-		// me.Overrides['OverrideAll'] = (await SS.get("OverrideAll")) ?? {};
     }
 
     me.callInjectCss = function (){	
-		chrome.tabs.sendMessage(me.CurrentTabId, {action: "injectCss", css: me.CssToInject} , null);
-		me.displayOverriden(me.CurrentTabId);
+	chrome.tabs.sendMessage(me.CurrentTabId, {action: "injectCss", css: me.CssToInject} , null);
+	me.displayOverriden(me.CurrentTabId);
     }
 
     me.callRemoveCss = function (){
-		chrome.tabs.sendMessage(me.CurrentTabId, {action: "removeCss"}, null);
+	chrome.tabs.sendMessage(me.CurrentTabId, {action: "removeCss"}, null);
     }
 
     me.setIsOverridenOrNot =  function (path, overrideType){
@@ -64,51 +45,49 @@ function CurrentPage ()
     }
 
     me.manageOverride = function (overrideType, blnValue, localStorageValue, action, CSSfn){
-		switch(action){
-		case 'add':
-		    me.Overrides[overrideType].push(localStorageValue);
-		    break;
-		case 'remove':
-		    me.Overrides[overrideType].splice(me.Overrides[overrideType].indexOf(localStorageValue),1);
-		    break;
-		case 'set':
-		    me.Overrides[overrideType] = localStorageValue;
-		    break;
-		}
-		SS.set({overrideType: JSON.stringify(me.Overrides[overrideType])});
-		me.blnOverrides[overrideType] = blnValue;
-		CSSfn();
+	switch(action){
+	case 'add':
+	    me.Overrides[overrideType].push(localStorageValue);
+	    break;
+	case 'remove':
+	    me.Overrides[overrideType].splice(me.Overrides[overrideType].indexOf(localStorageValue),1);
+	    break;
+	case 'set':
+	    me.Overrides[overrideType] = localStorageValue;
+	    break;
+	}
+	SS.set({overrideType: JSON.stringify(me.Overrides[overrideType])});
+	me.blnOverrides[overrideType] = blnValue;
+	CSSfn();
     }
 
     me.isStyleOverriden = function(){
-		me.setIsOverridenOrNot(me.Url, 'NotOverridenPages');
-		me.setIsOverridenOrNot(me.Domain, 'NotOverridenDomains');
-		me.setIsOverridenOrNot(me.Url, 'OverridenPages');
-		me.setIsOverridenOrNot(me.Domain, 'OverridenDomains');
-		me.blnOverrides['OverrideAll'] = loadOption('OverrideAll');
-		return (me.blnOverrides['OverrideAll'] && !(me.blnOverrides['NotOverridenPages'] || me.blnOverrides['NotOverridenDomains'])) || 
-			me.blnOverrides['OverridenPages'] || 
-			me.blnOverrides['OverridenDomains'];
+	me.setIsOverridenOrNot(me.Url, 'NotOverridenPages');
+	me.setIsOverridenOrNot(me.Domain, 'NotOverridenDomains');
+	me.setIsOverridenOrNot(me.Url, 'OverridenPages');
+	me.setIsOverridenOrNot(me.Domain, 'OverridenDomains');
+	me.blnOverrides['OverrideAll'] = loadOption('OverrideAll');
+	return (me.blnOverrides['OverrideAll'] && !(me.blnOverrides['NotOverridenPages'] || me.blnOverrides['NotOverridenDomains'])) || me.blnOverrides['OverridenPages'] || me.blnOverrides['OverridenDomains'];
     }
 
     me.setDefaults = function(){
-		setDefaultOption("OverridenDomains", new Array());
-		setDefaultOption("OverridenPages", new Array());
-		setDefaultOption("NotOverridenDomains", new Array());
-		setDefaultOption("NotOverridenPages", new Array());
-		setDefaultOption("CustomFonts", new Array());
-		setDefaultOption("OverrideAll", false);
-		setDefaultOption("IsNotFirstStart", true);
-		setDefaultOption("DefaultBrowserFont", true);
-		setDefaultOption("DefaultBrowserColor", false);
-		setDefaultOption("text_color", "E8E8E8");
-		setDefaultOption("background_color", "080808");
-		setDefaultOption("links_color", "2E79DB");
-		setDefaultOption("visited_links_color", "9B51DB");
-		setDefaultOption("FontSize", "0");
-		setDefaultOption("ShowImage", true);
-		setDefaultOption("ShowFlash", true);
-		setDefaultOption("OverrideFontName", "Arial");
+	setDefaultOption("OverridenDomains", new Array());
+	setDefaultOption("OverridenPages", new Array());
+	setDefaultOption("NotOverridenDomains", new Array());
+	setDefaultOption("NotOverridenPages", new Array());
+	setDefaultOption("CustomFonts", new Array());
+	setDefaultOption("OverrideAll", false);
+	setDefaultOption("IsNotFirstStart", true);
+	setDefaultOption("DefaultBrowserFont", true);
+	setDefaultOption("DefaultBrowserColor", false);
+	setDefaultOption("text_color", "E8E8E8");
+	setDefaultOption("background_color", "080808");
+	setDefaultOption("links_color", "2E79DB");
+	setDefaultOption("visited_links_color", "9B51DB");
+	setDefaultOption("FontSize", "0");
+	setDefaultOption("ShowImage", true);
+	setDefaultOption("ShowFlash", true);
+	setDefaultOption("OverrideFontName", "Arial");
     }
 
     me.updatePageAction = function(object){
@@ -154,62 +133,62 @@ function CurrentPage ()
     }
 
     me.displayDefault = function(tabId){
-		chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons_grey.png"});
+	chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons_grey.png"});
     }
 
 
     me.displayOverriden = function(tabId){
-		chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons.png"});
+	chrome.action.setIcon({tabId: tabId, path: "icons/colors_icons.png"});
     }
 
 
     me.buildCssToInject = function(){
-		var backgroundColor = '#' + loadOption("background_color");
-		var textColor = '#' + loadOption("text_color");
-		var linksColor = '#' + loadOption("links_color");
-		var visitedLinksColor = '#' + loadOption("visited_links_color");
-		var fontName = loadOption("OverrideFontName");
-		var fontSize = parseInt(loadOption("FontSize"));
-		var defaultBrowserFont = loadOption("DefaultBrowserFont");
-		var defaultBrowserColor = loadOption("DefaultBrowserColor");
-		var showImages = loadOption("ShowImage");
-		var showFlash = loadOption("ShowFlash");
+	var backgroundColor = '#' + loadOption("background_color");
+	var textColor = '#' + loadOption("text_color");
+	var linksColor = '#' + loadOption("links_color");
+	var visitedLinksColor = '#' + loadOption("visited_links_color");
+	var fontName = loadOption("OverrideFontName");
+	var fontSize = parseInt(loadOption("FontSize"));
+	var defaultBrowserFont = loadOption("DefaultBrowserFont");
+	var defaultBrowserColor = loadOption("DefaultBrowserColor");
+	var showImages = loadOption("ShowImage");
+	var showFlash = loadOption("ShowFlash");
 
-		if(defaultBrowserColor != true){
-		    var css =  'html > body, html > body * {' + 
-			'background-color: '+ backgroundColor +' !important;' +
-			'color: ' + textColor + ' !important;' + 
-			'text-shadow: 0 !important;' +
-			'-webkit-text-fill-color: none !important;}' +
-			'html > body, html > body *:not([onclick]):not(:link):not(:visited) {' +
-			'background-image: none !important;}' +
-			'html > body a:link, html > body a:link *,' +
-			'html > body a:link:hover, html > body a:link:hover *,' +
-			'html > body a:link:active, html > body a:link:active * {' +
-			'color: ' + linksColor + ' !important;}' +
-			'html > body a:visited, html > body a:visited *,' +
-			'html > body a:visited:hover, html > body a:visited:hover *,' +
-			'html > body a:visited:active, html > body a:visited:active * {' +
-			'color:' +  visitedLinksColor + ' !important;}';
-		}
-		if(defaultBrowserFont != true){
-		    css += 'html > body, html > body * {' +
-			'line-height: normal !important;' +
-			'font-family: '+ fontName  +' !important;';
-		    if(fontSize != 0){
-			css += 'font-size: '+ fontSize +'pt !important;}';
-		    }
-		    else{
-			css += '}'
-		    }
-		}
-		if(!showImages) {
-		    css += 'html > body img { display:none !important; }';
-		}
-		if(!showFlash){
-		    css += 'html > body object { display:none !important;}';
-		}
-		me.CssToInject = css;
+	if(defaultBrowserColor != true){
+	    var css =  'html > body, html > body * {' + 
+		'background-color: '+ backgroundColor +' !important;' +
+		'color: ' + textColor + ' !important;' + 
+		'text-shadow: 0 !important;' +
+		'-webkit-text-fill-color: none !important;}' +
+		'html > body, html > body *:not([onclick]):not(:link):not(:visited) {' +
+		'background-image: none !important;}' +
+		'html > body a:link, html > body a:link *,' +
+		'html > body a:link:hover, html > body a:link:hover *,' +
+		'html > body a:link:active, html > body a:link:active * {' +
+		'color: ' + linksColor + ' !important;}' +
+		'html > body a:visited, html > body a:visited *,' +
+		'html > body a:visited:hover, html > body a:visited:hover *,' +
+		'html > body a:visited:active, html > body a:visited:active * {' +
+		'color:' +  visitedLinksColor + ' !important;}';
+	}
+	if(defaultBrowserFont != true){
+	    css += 'html > body, html > body * {' +
+		'line-height: normal !important;' +
+		'font-family: '+ fontName  +' !important;';
+	    if(fontSize != 0){
+		css += 'font-size: '+ fontSize +'pt !important;}';
+	    }
+	    else{
+		css += '}'
+	    }
+	}
+	if(!showImages) {
+	    css += 'html > body img { display:none !important; }';
+	}
+	if(!showFlash){
+	    css += 'html > body object { display:none !important;}';
+	}
+	me.CssToInject = css;
     }
 
     me.setDefaults();
@@ -256,14 +235,12 @@ chrome.runtime.onMessage.addListener(
 	  else
 	      objCurrentPage.manageOverride('OverridenPages', true, objCurrentPage.Url, 'add', objCurrentPage.callInjectCss);
 	  break;
-
       case "overrideDomain":
 	  if(objCurrentPage.blnOverrides['OverridenDomains'])
 	      objCurrentPage.manageOverride('OverridenDomains', false, objCurrentPage.Domain, 'remove', objCurrentPage.callRemoveCss);
 	  else
 	      objCurrentPage.manageOverride('OverridenDomains', true, objCurrentPage.Domain, 'add', objCurrentPage.callInjectCss);
 	  break;
-
       case "overrideAll":
 	  if(objCurrentPage.blnOverrides['OverrideAll'])
 	      objCurrentPage.manageOverride('OverrideAll', false, false, 'set', objCurrentPage.callRemoveCss);
