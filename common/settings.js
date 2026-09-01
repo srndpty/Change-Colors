@@ -86,6 +86,14 @@ export function getOverrideState(settings, url) {
     return state;
 }
 
+/** Set by marker.js on elements that carry a background image. */
+export const BACKGROUND_IMAGE_ATTRIBUTE = 'data-changecolors-bgimage';
+
+/** Whether the styling needs marker.js to run in the page. */
+export function needsBackgroundMarker(settings) {
+    return !settings.DefaultBrowserColor && Boolean(settings.ShowImage);
+}
+
 /**
  * Selectors that must stay transparent so playing media remains visible.
  *
@@ -141,7 +149,13 @@ export function buildCss(settings) {
             'html > body a:visited:hover, html > body a:visited:hover *,' +
             'html > body a:visited:active, html > body a:visited:active * {' +
             'color: ' + visitedLinksColor + ' !important;}' +
-            mediaGuardSelectors() + '{background-color: transparent !important;}';
+            mediaGuardSelectors() + '{background-color: transparent !important;}' +
+            // marker.js tags the elements that carry a background image. An
+            // opaque background on what is drawn inside them - the headline and
+            // buttons of a hero banner - would hide the picture.
+            'html > body [' + BACKGROUND_IMAGE_ATTRIBUTE + '],' +
+            'html > body [' + BACKGROUND_IMAGE_ATTRIBUTE + '] * {' +
+            'background-color: transparent !important;}';
     }
 
     if (!settings.DefaultBrowserFont) {

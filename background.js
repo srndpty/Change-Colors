@@ -16,6 +16,7 @@ import {
     buildCss,
     getOverrideState,
     isSupportedUrl,
+    needsBackgroundMarker,
     toggleFlag,
     toggleListEntry
 } from './common/settings.js';
@@ -59,6 +60,37 @@ async function removeCss(tabId, css) {
     }
 }
 
+/**
+ * marker.js tags the elements carrying a background image so the stylesheet can
+ * keep the content drawn on top of them transparent. It is only needed while the
+ * colors are overridden and images are shown.
+ */
+async function startMarker(tabId, frameId) {
+    const target = frameId === undefined ?
+        {tabId: tabId, allFrames: true} :
+        {tabId: tabId, frameIds: [frameId]};
+    try {
+        await chrome.scripting.executeScript({target: target, files: ['marker.js']});
+    } catch (e) {
+        // Frame gone, or a document we may not script.
+    }
+}
+
+async function stopMarker(tabId) {
+    try {
+        await chrome.scripting.executeScript({
+            target: {tabId: tabId, allFrames: true},
+            func: function () {
+                if (window.__changeColorsMarker) {
+                    window.__changeColorsMarker.stop();
+                }
+            }
+        });
+    } catch (e) {
+        // Nothing to stop.
+    }
+}
+
 async function setIcon(tabId, active) {
     try {
         await chrome.action.setIcon({tabId: tabId, path: active ? ICON_ON : ICON_OFF});
@@ -85,11 +117,15 @@ async function syncTab(tabId, url, freshFrameId) {
     const settings = await getSettings();
     const state = getOverrideState(settings, url);
     const wantedCss = state.active ? buildCss(settings) : null;
+    const wantsMarker = state.active && needsBackgroundMarker(settings);
     await setIcon(tabId, state.active);
 
     if (freshFrameId !== undefined) {
         if (wantedCss) {
             await insertCss(tabId, wantedCss, freshFrameId);
+        }
+        if (wantsMarker) {
+            await startMarker(tabId, freshFrameId);
         }
         if (freshFrameId === 0) {
             await rememberInjectedCss(tabId, wantedCss);
@@ -106,6 +142,11 @@ async function syncTab(tabId, url, freshFrameId) {
     }
     if (wantedCss) {
         await insertCss(tabId, wantedCss);
+    }
+    if (wantsMarker) {
+        await startMarker(tabId);
+    } else {
+        await stopMarker(tabId);
     }
     await rememberInjectedCss(tabId, wantedCss);
 }
@@ -135,6 +176,10 @@ chrome.webNavigation.onCommitted.addListener(async function (details) {
     const injectedCss = await getInjectedCss(details.tabId);
     if (injectedCss) {
         await insertCss(details.tabId, injectedCss, details.frameId);
+        const settings = await getSettings();
+        if (needsBackgroundMarker(settings)) {
+            await startMarker(details.tabId, details.frameId);
+        }
     }
 });
 

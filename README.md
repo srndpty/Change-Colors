@@ -34,6 +34,8 @@ runs on Manifest V3, with the same features and the same settings.
 - Fixed: **CSS background images were wiped out**, which turned hero banners
   into flat dark rectangles. Background images now follow the "Show images?"
   option, so they are kept by default and only removed when you turn images off.
+  `marker.js` tags the elements that carry one, so the headline and buttons
+  drawn on top of a banner stay transparent instead of covering it.
 - Fixed: with "use web pages colors" enabled, the generated stylesheet started
   with the string `undefined` and the whole first rule was dropped.
 - Fixed invalid declarations in the generated CSS: `text-shadow: 0` is now
@@ -62,6 +64,7 @@ runs on Manifest V3, with the same features and the same settings.
 | `popup.html/.js`     | Toolbar popup: per page, per domain and global override    |
 | `options.html/.js`   | Preferences                                                |
 | `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
+| `marker.js`          | Tags elements carrying a background image, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
 

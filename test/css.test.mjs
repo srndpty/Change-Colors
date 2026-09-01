@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {DEFAULTS, buildCss} from '../common/settings.js';
+import {fileURLToPath} from 'node:url';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const PORT = 8124;
@@ -22,12 +23,21 @@ const PAGE = `<!doctype html><html><head><style>
   </div>
 </div></div>
 <div id="menu" style="background:#ffffff">dropdown</div>
-<div id="hero" style="width:400px;height:200px;background-image:url(data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==);background-color:#fff"></div>
+<div id="hero" style="width:400px;height:200px;background-image:url(/hero.gif);background-size:cover;background-color:#fff">
+  <h2 id="heroText" style="background:#ffffff">headline over the banner</h2>
+</div>
+<div id="placeholder" style="width:400px;height:200px;background-image:url(data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==);background-color:#fff"><span id="placeholderText">lazy</span></div>
 <img id="img" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" />
 <a id="a" href="https://example.com/">link</a>
 </body></html>`;
 
+const PIXEL = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64');
 const server = http.createServer((req, res) => {
+    if (req.url === '/hero.gif') {
+        res.writeHead(200, {'Content-Type': 'image/gif'});
+        res.end(PIXEL);
+        return;
+    }
     res.writeHead(200, {'Content-Type': 'text/html'});
     res.end(PAGE);
 }).listen(PORT);
@@ -117,6 +127,37 @@ try {
 
     const heroImage = await evaluate(sessionId, 'getComputedStyle(document.getElementById("hero")).backgroundImage');
     check('hero background image survives', heroImage.startsWith('url('), true);
+
+    // Before marker.js runs, the headline is painted over the banner.
+    check('headline over the banner is opaque without the marker', await bg('heroText'), 'rgb(8, 8, 8)');
+
+    const markerSource = fs.readFileSync(fileURLToPath(new URL('../marker.js', import.meta.url)), 'utf8');
+    await evaluate(sessionId, markerSource);
+    await sleep(1200);
+
+    check('banner is marked', await evaluate(sessionId,
+        'document.getElementById("hero").hasAttribute("data-changecolors-bgimage")'), true);
+    check('headline over the banner becomes transparent', await bg('heroText'), 'rgba(0, 0, 0, 0)');
+    check('lazy-loading placeholder is not marked', await evaluate(sessionId,
+        'document.getElementById("placeholder").hasAttribute("data-changecolors-bgimage")'), false);
+    check('content outside a banner stays opaque', await bg('menu'), 'rgb(8, 8, 8)');
+
+    // Dynamically added banners are picked up by the observer.
+    await evaluate(sessionId, `(() => {
+        const el = document.createElement('div');
+        el.id = 'late';
+        el.style.cssText = 'width:400px;height:200px;background-image:url(/hero.gif);background-size:cover';
+        el.innerHTML = '<span id="lateText" style="background:#fff">late</span>';
+        document.body.appendChild(el);
+    })()`);
+    await sleep(1200);
+    check('banner added after load is marked', await bg('lateText'), 'rgba(0, 0, 0, 0)');
+
+    await evaluate(sessionId, 'window.__changeColorsMarker.stop()');
+    check('stopping the marker removes its attributes', await evaluate(sessionId,
+        'document.querySelectorAll("[data-changecolors-bgimage]").length'), 0);
+    await evaluate(sessionId, markerSource);
+    await sleep(1200);
 
     // Hiding images must still work.
     const hidden = buildCss(Object.assign({}, DEFAULTS, {ShowImage: false}));
