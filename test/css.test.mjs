@@ -22,6 +22,7 @@ const PAGE = `<!doctype html><html><head><style>
   </div>
 </div></div>
 <div id="menu" style="background:#ffffff">dropdown</div>
+<div id="hero" style="width:400px;height:200px;background-image:url(data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==);background-color:#fff"></div>
 <img id="img" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" />
 <a id="a" href="https://example.com/">link</a>
 </body></html>`;
@@ -114,6 +115,9 @@ try {
     check('grandparent of the video transparent', await bg('mid'), 'rgba(0, 0, 0, 0)');
     check('great-grandparent of the video transparent', await bg('outer'), 'rgba(0, 0, 0, 0)');
 
+    const heroImage = await evaluate(sessionId, 'getComputedStyle(document.getElementById("hero")).backgroundImage');
+    check('hero background image survives', heroImage.startsWith('url('), true);
+
     // Hiding images must still work.
     const hidden = buildCss(Object.assign({}, DEFAULTS, {ShowImage: false}));
     await evaluate(sessionId, `(() => {
@@ -122,6 +126,8 @@ try {
         document.head.appendChild(style);
     })()`);
     check('images can be hidden', await evaluate(sessionId, 'getComputedStyle(document.getElementById("img")).display'), 'none');
+    check('hiding images also drops CSS background images',
+        await evaluate(sessionId, 'getComputedStyle(document.getElementById("hero")).backgroundImage'), 'none');
 } catch (e) {
     console.log('FAIL  test run -> ' + e);
     results.push(false);

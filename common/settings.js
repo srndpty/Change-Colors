@@ -133,8 +133,6 @@ export function buildCss(settings) {
             'color: ' + textColor + ' !important;' +
             'text-shadow: none !important;' +
             '-webkit-text-fill-color: currentcolor !important;}' +
-            'html > body, html > body *:not([onclick]):not(:link):not(:visited) {' +
-            'background-image: none !important;}' +
             'html > body a:link, html > body a:link *,' +
             'html > body a:link:hover, html > body a:link:hover *,' +
             'html > body a:link:active, html > body a:link:active * {' +
@@ -155,7 +153,13 @@ export function buildCss(settings) {
     }
 
     if (!settings.ShowImage) {
-        css += 'html > body img { display: none !important; }';
+        // Hiding images covers CSS backgrounds too, otherwise hero banners and
+        // other decorative images would survive as element backgrounds.
+        // Clickable elements keep theirs, because that is often the only thing
+        // marking a button or an icon.
+        css += 'html > body img { display: none !important; }' +
+            'html > body, html > body *:not([onclick]):not(:link):not(:visited) {' +
+            'background-image: none !important;}';
     }
 
     if (!settings.ShowFlash) {

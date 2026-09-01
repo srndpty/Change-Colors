@@ -193,3 +193,9 @@ h1
 {
   margin-top: 5px;
 }
+
+.option_hint
+{
+  font-size: 9pt;
+  color: #4D4D4D;
+}

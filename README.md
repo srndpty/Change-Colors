@@ -31,6 +31,9 @@ runs on Manifest V3, with the same features and the same settings.
   every element also painted the overlays a player stacks on top of its
   `<video>` (thumbnail, gradients, end screen), hiding the picture. The player
   container chain and everything inside it now stays transparent.
+- Fixed: **CSS background images were wiped out**, which turned hero banners
+  into flat dark rectangles. Background images now follow the "Show images?"
+  option, so they are kept by default and only removed when you turn images off.
 - Fixed: with "use web pages colors" enabled, the generated stylesheet started
   with the string `undefined` and the whole first rule was dropped.
 - Fixed invalid declarations in the generated CSS: `text-shadow: 0` is now
