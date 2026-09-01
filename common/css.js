@@ -1,16 +1,33 @@
 /**
  * Stylesheet generation.
  *
- * The same rules are needed twice: once for the document, and once inside every
- * shadow root, because a document stylesheet does not reach into shadow trees -
- * that is why components built with shadow DOM (YouTube's sidebar, for one)
- * kept their own black-on-white text over the dark background. Both variants
- * are generated from one set of rules through a "scope": the document scope
- * anchors everything at `html > body`, the shadow scope at `:host`.
+ * Two things shape these rules.
+ *
+ * The stylesheet is generated twice: once for the document, and once for shadow
+ * roots, because a document stylesheet does not cross a shadow boundary and
+ * components built with shadow DOM would keep their own colors. Both come from
+ * one set of rules through a "scope" - the document scope anchors everything at
+ * `html > body`, the shadow scope at `:host`.
+ *
+ * And the opaque background is painted on everything, then taken back off the
+ * elements that never had one. Sites stack transparent elements on top of their
+ * content - ripple overlays on a menu entry, the controls over a video, the
+ * headline over a hero banner - and painting those opaque hides what is below.
+ * agent.js measures each element's own background and tags the see-through ones
+ * so `[data-changecolors-clear]` can restore them. Painting first and clearing
+ * afterwards keeps the page readable even if the agent never gets to run.
  */
 
-/** Set by agent.js on elements that carry a background image. */
-export const BACKGROUND_IMAGE_ATTRIBUTE = 'data-changecolors-bgimage';
+/** Set by agent.js on elements whose own background is see-through. */
+export const CLEAR_ATTRIBUTE = 'data-changecolors-clear';
+
+/**
+ * Set by agent.js while it measures an element, to read the background the site
+ * asks for rather than the one we just painted.
+ */
+export const PROBE_ATTRIBUTE = 'data-changecolors-probe';
+
+const NOT_PROBED = ':not([' + PROBE_ATTRIBUTE + '])';
 
 const DOCUMENT_SCOPE = {root: 'html > body', prefix: 'html > body ', host: null};
 const SHADOW_SCOPE = {root: ':host', prefix: '', host: ':host'};
@@ -18,20 +35,15 @@ const SHADOW_SCOPE = {root: ':host', prefix: '', host: ':host'};
 /**
  * Specificity padding.
  *
- * Sites do use `!important` themselves, and when they do it on an id or class
- * selector their declaration beats ours - that is how a component ends up
- * keeping its black text on our dark background. `:not(#id)` matches
- * everything while counting as an id, so it lifts our rules above anything a
- * page is likely to declare without changing what they match. Rules that have
- * to win against our own base rule (link colors, the media and banner guards)
+ * Sites use `!important` themselves, and on an id or class selector their
+ * declaration beats ours - that is how a component keeps its black text on our
+ * dark background. `:not(#id)` matches everything while counting as an id, so
+ * it lifts our rules above anything a page is likely to declare without
+ * changing what they match. Rules that have to win against our own base rule
  * get one level more.
  */
 const BOOST = ':not(#changecolors-a):not(#changecolors-b):not(#changecolors-c)';
 const BOOST_OVER_BASE = BOOST + ':not(#changecolors-d)';
-
-function boosted(selector, boost) {
-    return selector + boost;
-}
 
 /**
  * Quotes a font family name for CSS. Settings saved by older versions already
@@ -44,19 +56,13 @@ export function cssFontFamily(name) {
 
 function prefixed(scope, selectors, boost) {
     return selectors.map(function (selector) {
-        return boosted(scope.prefix + selector, boost || BOOST);
+        return scope.prefix + selector + (boost || BOOST);
     }).join(',');
 }
 
 /**
- * Selectors that must stay transparent so playing media remains visible.
- *
- * Forcing an opaque background on every element also paints the overlays a
- * video player stacks on top of its <video> (thumbnails, gradients, end
- * screens), which is what turned videos into a black rectangle. Clearing the
- * background of the player container chain - up to four levels above the
- * <video> - and of everything inside it lets the video show through again,
- * while the rest of the page keeps its solid background.
+ * Selectors that must stay transparent so playing media remains visible, even
+ * on a page where agent.js could not run.
  */
 function mediaGuard(scope) {
     const selectors = ['video', 'audio'];
@@ -68,20 +74,11 @@ function mediaGuard(scope) {
     return prefixed(scope, selectors, BOOST_OVER_BASE);
 }
 
-/**
- * agent.js tags the elements that carry a background image. An opaque
- * background on what is drawn inside them - the headline and buttons of a hero
- * banner - would hide the picture.
- */
-function bannerGuard(scope) {
-    const selectors = [
-        '[' + BACKGROUND_IMAGE_ATTRIBUTE + ']',
-        '[' + BACKGROUND_IMAGE_ATTRIBUTE + '] *'
-    ];
-    let css = prefixed(scope, selectors, BOOST_OVER_BASE);
+/** Elements agent.js found to have no background of their own. */
+function clearedSelectors(scope) {
+    let css = prefixed(scope, ['[' + CLEAR_ATTRIBUTE + ']' + NOT_PROBED], BOOST_OVER_BASE);
     if (scope.host) {
-        // The host of this shadow tree may be the banner itself.
-        css += ',' + boosted(':host([' + BACKGROUND_IMAGE_ATTRIBUTE + ']) *', BOOST_OVER_BASE);
+        css += ',:host([' + CLEAR_ATTRIBUTE + '])' + NOT_PROBED + BOOST_OVER_BASE;
     }
     return css;
 }
@@ -95,24 +92,27 @@ function linkSelectors(scope, state) {
 }
 
 function build(settings, scope) {
-    const everything = boosted(scope.root, BOOST) + ',' + boosted(scope.prefix + '*', BOOST);
+    // The page frame always keeps the chosen background; only elements inside it
+    // can be cleared again.
+    const frame = scope.root + BOOST;
+    const inside = scope.prefix + '*' + NOT_PROBED + BOOST;
     let css = '';
 
     if (!settings.DefaultBrowserColor) {
-        css += everything + '{' +
+        css += frame + ',' + inside + '{' +
             'background-color: #' + settings.background_color + ' !important;' +
             'color: #' + settings.text_color + ' !important;' +
             'text-shadow: none !important;' +
             '-webkit-text-fill-color: currentcolor !important;}' +
+            clearedSelectors(scope) + '{background-color: transparent !important;}' +
             linkSelectors(scope, 'link') + '{color: #' + settings.links_color + ' !important;}' +
             linkSelectors(scope, 'visited') + '{color: #' + settings.visited_links_color + ' !important;}' +
-            mediaGuard(scope) + '{background-color: transparent !important;}' +
-            bannerGuard(scope) + '{background-color: transparent !important;}';
+            mediaGuard(scope) + '{background-color: transparent !important;}';
     }
 
     if (!settings.DefaultBrowserFont) {
         const fontSize = parseInt(settings.FontSize, 10) || 0;
-        css += everything + '{' +
+        css += scope.root + BOOST + ',' + scope.prefix + '*' + BOOST + '{' +
             'line-height: normal !important;' +
             'font-family: ' + cssFontFamily(settings.OverrideFontName) + ' !important;' +
             (fontSize !== 0 ? 'font-size: ' + fontSize + 'pt !important;' : '') +
@@ -125,8 +125,8 @@ function build(settings, scope) {
         // Clickable elements keep theirs, because that is often the only thing
         // marking a button or an icon.
         css += prefixed(scope, ['img']) + '{display: none !important;}' +
-            boosted(scope.root, BOOST) + ',' +
-            boosted(scope.prefix + '*:not([onclick]):not(:link):not(:visited)', BOOST) +
+            scope.root + BOOST + ',' +
+            scope.prefix + '*:not([onclick]):not(:link):not(:visited)' + BOOST +
             '{background-image: none !important;}';
     }
 

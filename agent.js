@@ -1,22 +1,28 @@
 /**
  * Runs in the page (isolated world) and does the two things a document
- * stylesheet cannot do on its own:
+ * stylesheet cannot do on its own.
  *
- * 1. Styles shadow trees. A stylesheet injected in the document never crosses a
- *    shadow boundary, so components built with shadow DOM keep the colors their
- *    own styles give them - black text on the dark background we just painted.
- *    The same rules, rewritten around `:host`, are adopted by every shadow root.
+ * 1. It gives back the elements that never had a background of their own. The
+ *    stylesheet paints everything with the chosen background, which is what
+ *    made sites unreadable in places: the transparent overlays a page stacks on
+ *    top of its content - the ripple layer over a menu entry, the controls over
+ *    a video, the headline over a hero banner - turned opaque and covered what
+ *    was underneath. Each element is measured with the stylesheet held off for
+ *    the length of the measurement, and the see-through ones are tagged so the
+ *    stylesheet clears them again.
  *
- * 2. Tags elements that carry a background image, because CSS has no selector
- *    for "has a background image". Without the tag, the headline and buttons a
- *    site draws inside a hero banner get an opaque background and hide it.
+ * 2. It styles shadow trees. A stylesheet injected in the document never
+ *    crosses a shadow boundary, so components built with shadow DOM keep the
+ *    colors their own styles give them. The same rules, written around `:host`,
+ *    are adopted by every shadow root.
  */
 (function () {
-    const ATTRIBUTE = 'data-changecolors-bgimage';
-    const MIN_AREA = 10000;
-    const FLUSH_DELAY = 400;
-    const MAX_PER_FLUSH = 5000;
-    const LATE_RESCANS = [500, 2000, 5000];
+    const CLEAR = 'data-changecolors-clear';
+    const PROBE = 'data-changecolors-probe';
+    // Anything this translucent reads as an overlay rather than a surface.
+    const SOLID_ALPHA = 0.9;
+    const FLUSH_DELAY = 100;
+    const MAX_PER_FLUSH = 6000;
 
     if (window.__changeColorsAgent) {
         window.__changeColorsAgent.rescan();
@@ -30,28 +36,27 @@
     /* ------------------------------------------------------- shadow trees */
 
     function adopt(root) {
-        if (!sheet) {
-            return;
-        }
         try {
-            if (root.adoptedStyleSheets.indexOf(sheet) === -1) {
-                root.adoptedStyleSheets = root.adoptedStyleSheets.concat([sheet]);
+            if (sheet) {
+                if (root.adoptedStyleSheets.indexOf(sheet) === -1) {
+                    root.adoptedStyleSheets = root.adoptedStyleSheets.concat([sheet]);
+                }
+                styledRoots.add(root);
+                return;
             }
-            styledRoots.add(root);
         } catch (e) {
-            // Constructed stylesheets unavailable or refused: fall back to a
-            // plain <style> element inside the shadow tree.
-            let style = root.querySelector('style[data-changecolors]');
-            if (!style) {
-                style = document.createElement('style');
-                style.setAttribute('data-changecolors', '');
-                root.appendChild(style);
-            }
-            if (style.textContent !== sheetCss) {
-                style.textContent = sheetCss;
-            }
-            styledRoots.add(root);
+            // Constructed stylesheets refused; fall through to a <style> tag.
         }
+        let style = root.querySelector('style[data-changecolors]');
+        if (!style) {
+            style = document.createElement('style');
+            style.setAttribute('data-changecolors', '');
+            root.appendChild(style);
+        }
+        if (style.textContent !== sheetCss) {
+            style.textContent = sheetCss;
+        }
+        styledRoots.add(root);
     }
 
     function setCss(css) {
@@ -74,76 +79,79 @@
         rescan();
     }
 
-    /* --------------------------------------------------- background images */
+    /* ----------------------------------------------------- own background */
 
-    /**
-     * Only backgrounds that behave like a picture qualify. Data-URI backgrounds
-     * are skipped because they are almost always lazy-loading placeholders, and
-     * a background taller than the viewport is the page backdrop rather than a
-     * banner - clearing everything inside that would undo the styling.
-     */
-    function carriesBackgroundImage(element) {
-        if (element === document.documentElement || element === document.body) {
-            return false;
+    function isSeeThrough(color) {
+        const match = /^rgba?\(([^)]+)\)/.exec(color || '');
+        if (!match) {
+            return true;
         }
-        const style = window.getComputedStyle(element);
-        const image = style.backgroundImage;
-        if (!image || image.indexOf('url(') === -1) {
-            return false;
-        }
-        if (image.indexOf('url("data:') !== -1 || image.indexOf('url(data:') !== -1) {
-            return false;
-        }
-        const rect = element.getBoundingClientRect();
-        if (rect.width * rect.height < MIN_AREA) {
-            return false;
-        }
-        return rect.height <= window.innerHeight * 1.5;
+        const parts = match[1].split(/[,/]/);
+        const alpha = parts.length > 3 ? parseFloat(parts[3]) : 1;
+        return !(alpha >= SOLID_ALPHA);
     }
 
-    function evaluate(element) {
-        const marked = element.hasAttribute(ATTRIBUTE);
-        const wanted = carriesBackgroundImage(element);
-        if (wanted && !marked) {
-            element.setAttribute(ATTRIBUTE, '');
-        } else if (!wanted && marked) {
-            element.removeAttribute(ATTRIBUTE);
+    /**
+     * Measures a batch in three steps so the browser only recalculates styles
+     * once per step: tag everything as being probed (which takes our own
+     * background rules out of the cascade), read what the site asks for, then
+     * apply the verdicts. No paint happens in between, so nothing flickers.
+     */
+    function measure(elements) {
+        if (!elements.length) {
+            return;
+        }
+        for (const element of elements) {
+            element.setAttribute(PROBE, '');
+        }
+        const seeThrough = elements.map(function (element) {
+            return isSeeThrough(window.getComputedStyle(element).backgroundColor);
+        });
+        for (let i = 0; i < elements.length; i++) {
+            const element = elements[i];
+            element.removeAttribute(PROBE);
+            if (seeThrough[i]) {
+                if (!element.hasAttribute(CLEAR)) {
+                    element.setAttribute(CLEAR, '');
+                }
+            } else if (element.hasAttribute(CLEAR)) {
+                element.removeAttribute(CLEAR);
+            }
         }
     }
 
     /* ------------------------------------------------------------- walking */
 
-    let budget = 0;
-
-    function visit(element) {
-        evaluate(element);
-        if (element.shadowRoot) {
-            adopt(element.shadowRoot);
-            walk(element.shadowRoot);
-        }
-    }
-
-    function walk(root) {
+    function collect(root, into, budget) {
         const elements = root.querySelectorAll('*');
-        for (let i = 0; i < elements.length && budget > 0; i++, budget--) {
-            visit(elements[i]);
+        for (let i = 0; i < elements.length && into.length < budget; i++) {
+            const element = elements[i];
+            if (element !== document.documentElement && element !== document.body) {
+                into.push(element);
+            }
+            if (element.shadowRoot) {
+                adopt(element.shadowRoot);
+                collect(element.shadowRoot, into, budget);
+            }
         }
     }
 
     function scan(roots) {
-        budget = MAX_PER_FLUSH;
+        const elements = [];
         for (const root of roots) {
             if (root.isConnected === false) {
                 continue;
             }
-            if (root.nodeType === Node.ELEMENT_NODE) {
-                visit(root);
+            if (root.nodeType === Node.ELEMENT_NODE &&
+                    root !== document.documentElement && root !== document.body) {
+                elements.push(root);
             }
-            walk(root);
-            if (budget <= 0) {
-                return;
+            collect(root, elements, MAX_PER_FLUSH);
+            if (elements.length >= MAX_PER_FLUSH) {
+                break;
             }
         }
+        measure(elements);
     }
 
     const pending = new Set();
@@ -178,7 +186,7 @@
                     }
                 });
             } else if (record.target.nodeType === Node.ELEMENT_NODE) {
-                // A class or style change is how lazily loaded banners arrive.
+                // A class or style change is how a page repaints an element.
                 schedule(record.target);
             }
         }
@@ -193,11 +201,10 @@
             attributeFilter: ['class', 'style']
         });
         // Shadow roots are often attached, and backgrounds often applied, after
-        // the first pass. The document observer does not see changes made
-        // inside a shadow tree, so check back a few times while the page
-        // settles.
+        // the first pass, and changes inside a shadow tree are invisible to the
+        // observer above.
         window.addEventListener('load', rescan, {once: true});
-        LATE_RESCANS.forEach(function (delay) {
+        [500, 2000, 5000].forEach(function (delay) {
             setTimeout(rescan, delay);
         });
     }
@@ -217,29 +224,25 @@
                         return adopted !== sheet;
                     });
                 } catch (e) {
-                    // Ignore roots we can no longer touch.
+                    // Root is gone.
                 }
                 const style = root.querySelector && root.querySelector('style[data-changecolors]');
                 if (style) {
                     style.remove();
                 }
-                if (root.querySelectorAll) {
-                    root.querySelectorAll('[' + ATTRIBUTE + ']').forEach(function (element) {
-                        element.removeAttribute(ATTRIBUTE);
-                    });
-                }
             });
             styledRoots.clear();
-            document.querySelectorAll('[' + ATTRIBUTE + ']').forEach(function (element) {
-                element.removeAttribute(ATTRIBUTE);
+            document.querySelectorAll('[' + CLEAR + '],[' + PROBE + ']').forEach(function (element) {
+                element.removeAttribute(CLEAR);
+                element.removeAttribute(PROBE);
             });
             delete window.__changeColorsAgent;
         }
     };
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start, {once: true});
-    } else {
+    if (document.documentElement) {
         start();
+    } else {
+        document.addEventListener('DOMContentLoaded', start, {once: true});
     }
 })();

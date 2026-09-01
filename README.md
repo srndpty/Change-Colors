@@ -27,15 +27,19 @@ runs on Manifest V3, with the same features and the same settings.
   `chrome://extensions/shortcuts` - the options page links there.
 - SPA navigations (`history.pushState`) are now noticed, so per-page overrides
   apply on sites like YouTube without a reload.
-- Fixed: **videos turned black while playing**. Forcing an opaque background on
-  every element also painted the overlays a player stacks on top of its
-  `<video>` (thumbnail, gradients, end screen), hiding the picture. The player
-  container chain and everything inside it now stays transparent.
+- Fixed: **anything a site stacked on top of its own content disappeared or
+  covered what was underneath**. Painting an opaque background on every element
+  also painted the see-through layers a page puts over its content, so videos
+  turned into a black rectangle, hero banners into flat dark boxes, and menu
+  entries (YouTube's sidebar) had their labels hidden by the invisible ripple
+  layer sitting over them. `agent.js` now measures each element's own
+  background, with the extension's rules held off for the length of the
+  measurement, and tags the see-through ones so the stylesheet clears them
+  again. Painting first and clearing afterwards keeps a page readable even
+  where the agent cannot run.
 - Fixed: **CSS background images were wiped out**, which turned hero banners
   into flat dark rectangles. Background images now follow the "Show images?"
   option, so they are kept by default and only removed when you turn images off.
-  `agent.js` tags the elements that carry one, so the headline and buttons
-  drawn on top of a banner stay transparent instead of covering it.
 - Fixed: **text inside shadow DOM kept its own color** and became unreadable on
   the dark background - whole parts of a page (YouTube's sidebar and its filter
   chips, for example) looked blank. A document stylesheet never crosses a shadow
