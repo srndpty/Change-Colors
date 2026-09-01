@@ -21,6 +21,10 @@ const PORT = 8126;
 const WINDOW = 6000;
 // The regression this guards against was measured in seconds, not milliseconds.
 const MAX_EXTRA_RECALC_SECONDS = 1;
+// The agent's own work - observer callbacks, walking the DOM, thousands of
+// getComputedStyle() calls - is not style recalculation and would not show up
+// in the metric above.
+const MAX_EXTRA_SCRIPT_SECONDS = 1.5;
 
 const PAGE = `<!doctype html><html><head><style>
 body { background:#fff; color:#111; font: 13px sans-serif; margin:0 }
@@ -109,9 +113,10 @@ async function evaluate(sessionId, expression) {
     if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300));
     return r.result.result.value;
 }
-async function recalcSeconds(sessionId) {
+async function costSeconds(sessionId) {
     const r = await send('Performance.getMetrics', {}, sessionId);
-    return r.result.metrics.find(m => m.name === 'RecalcStyleDuration').value;
+    const value = name => r.result.metrics.find(m => m.name === name).value;
+    return {recalc: value('RecalcStyleDuration'), script: value('ScriptDuration')};
 }
 
 let failed = false;
@@ -128,9 +133,9 @@ try {
     await send('Performance.enable', {}, sessionId);
     await sleep(2000);
 
-    const baseStart = await recalcSeconds(sessionId);
+    const baseStart = await costSeconds(sessionId);
     await sleep(WINDOW);
-    const baseline = await recalcSeconds(sessionId) - baseStart;
+    const baseEnd = await costSeconds(sessionId);
 
     await evaluate(sessionId, `(() => {
         const s = document.createElement('style');
@@ -141,17 +146,26 @@ try {
     await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(DEFAULTS))})`);
     await sleep(2000);
 
-    const styledStart = await recalcSeconds(sessionId);
+    const styledStart = await costSeconds(sessionId);
     await sleep(WINDOW);
-    const styled = await recalcSeconds(sessionId) - styledStart;
+    const styledEnd = await costSeconds(sessionId);
 
-    const extra = styled - baseline;
-    console.log(`style recalculation over ${WINDOW / 1000}s: ` +
-        `${baseline.toFixed(3)}s without the extension, ${styled.toFixed(3)}s with it ` +
-        `(+${extra.toFixed(3)}s)`);
-    failed = !(extra < MAX_EXTRA_RECALC_SECONDS);
-    console.log((failed ? 'FAIL  ' : 'PASS  ') +
-        `extra style recalculation stays under ${MAX_EXTRA_RECALC_SECONDS}s`);
+    const results = [];
+    function report(what, baseline, styled, budget) {
+        const extra = styled - baseline;
+        console.log(`${what} over ${WINDOW / 1000}s: ` +
+            `${baseline.toFixed(3)}s without the extension, ${styled.toFixed(3)}s with it ` +
+            `(+${extra.toFixed(3)}s)`);
+        const ok = extra < budget;
+        results.push(ok);
+        console.log((ok ? 'PASS  ' : 'FAIL  ') +
+            `extra ${what} stays under ${budget}s`);
+    }
+    report('style recalculation', baseEnd.recalc - baseStart.recalc,
+        styledEnd.recalc - styledStart.recalc, MAX_EXTRA_RECALC_SECONDS);
+    report('script time', baseEnd.script - baseStart.script,
+        styledEnd.script - styledStart.script, MAX_EXTRA_SCRIPT_SECONDS);
+    failed = results.includes(false);
 } catch (e) {
     console.log('FAIL  perf run -> ' + e);
     failed = true;

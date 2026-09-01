@@ -17,6 +17,9 @@ const PORT = 8124;
 const PAGE = `<!doctype html><html><head><style>
 /* The kind of declaration that used to beat the extension. */
 #stubborn { color: #0f0f0f !important; background-color: #ffffff !important; }
+/* The kind of rule that gives a descendant a background when an ancestor's
+   class changes - a theme switch, an expanded menu. */
+.dark #themed { background-color: #ffffff; }
 </style></head><body style="background:#ffffff;color:#111">
 <h1 id="h">hello</h1>
 
@@ -42,6 +45,11 @@ const PAGE = `<!doctype html><html><head><style>
 
 <div id="scrim" style="background:rgba(255,255,255,0.5)">translucent</div>
 <div id="dynamic">dynamic background</div>
+
+<!-- A background a descendant only gets through an ancestor's class... -->
+<div id="theme"><div id="themed">themed</div></div>
+<!-- ...or through an inherited custom property. -->
+<div id="varHost" style="--surface: transparent"><div id="varChild" style="background: var(--surface)">var</div></div>
 
 <img id="img" src="/hero.gif" width="200" height="120" />
 <a id="a" href="https://example.com/">link</a>
@@ -218,11 +226,64 @@ try {
     check('nested shadow tree is styled too',
         await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), TEXT);
 
+    // Changes inside a shadow tree are invisible to an observer watching the
+    // document, so each root found is watched itself.
+    await evaluate(sessionId, `(() => {
+        const root = document.getElementById('widget').shadowRoot;
+        root.innerHTML += '<em id="shadowLate" style="background:#fff">late</em>' +
+            '<u id="shadowLateClear">late overlay</u>';
+    })()`);
+    await sleep(800);
+    check('content added later inside a shadow tree, with a background, is painted',
+        await evaluate(sessionId, 'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLate")).backgroundColor'), DARK);
+    check('content added later inside a shadow tree, without one, is cleared',
+        await evaluate(sessionId, 'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLateClear")).backgroundColor'), CLEAR);
+
+    /* ------------------------------------------- restyling from an ancestor */
+
+    check('a descendant with no background of its own starts cleared', await bg('themed'), CLEAR);
+    await evaluate(sessionId, 'document.getElementById("theme").className = "dark"');
+    await sleep(600);
+    check('a class on an ancestor is remeasured down the subtree', await bg('themed'), DARK);
+    await evaluate(sessionId, 'document.getElementById("theme").className = ""');
+    await sleep(600);
+    check('removing it clears the descendant again', await bg('themed'), CLEAR);
+
+    check('a descendant reading an empty custom property starts cleared', await bg('varChild'), CLEAR);
+    await evaluate(sessionId, 'document.getElementById("varHost").style.setProperty("--surface", "#ffffff")');
+    await sleep(600);
+    check('a custom property set on an ancestor is remeasured down the subtree', await bg('varChild'), DARK);
+
+    /* ------------------------------------------------- more than one flush */
+
+    // A subtree bigger than one flush's budget must be finished by the next
+    // flush, not dropped: the last elements of a big page are exactly the ones
+    // a "measure the first few thousand" implementation lost.
+    await evaluate(sessionId, `(() => {
+        const big = document.createElement('div');
+        big.id = 'big';
+        const parts = [];
+        for (let i = 0; i < 9000; i++) {
+            parts.push('<div id="big' + i + '"' +
+                (i % 2 ? ' style="background:#fff"' : '') + '>x</div>');
+        }
+        big.innerHTML = parts.join('');
+        document.body.appendChild(big);
+    })()`);
+    await sleep(3000);
+    check('an element past the first flush, with a background, is painted', await bg('big8999'), DARK);
+    check('an element past the first flush, without one, is cleared', await bg('big8998'), CLEAR);
+    check('every element of a 9000 element subtree was measured', await evaluate(sessionId,
+        'document.querySelectorAll("#big > div[data-changecolors-clear]").length'), 4500);
+    await evaluate(sessionId, 'document.getElementById("big").remove()');
+
     /* ---------------------------------------------------------- turning off */
 
     await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
     check('stopping the agent removes its attributes', await evaluate(sessionId,
         'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
+    check('stopping the agent removes them inside shadow trees too', await evaluate(sessionId,
+        'document.getElementById("widget").shadowRoot.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
     check('stopping the agent restores shadow tree colors',
         await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
 

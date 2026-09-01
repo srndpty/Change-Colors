@@ -9,6 +9,15 @@
  * The service worker is not persistent, so the stylesheet currently injected in
  * a tab is remembered in chrome.storage.session (needed to remove exactly that
  * stylesheet later) rather than in a module variable.
+ *
+ * Everything that touches a tab goes through one queue per tab. Syncing is a
+ * read-modify-write ("which stylesheet is in this tab" -> remove it -> insert
+ * the new one -> write it back) driven by four independent event sources, and
+ * chrome.scripting.removeCSS only removes a stylesheet whose text is handed
+ * back to it exactly: two overlapping syncs would leave a stylesheet in the
+ * page that nothing can remove any more. The queue also gives sub frames the
+ * ordering they need - a frame commits after its parent, so by the time its
+ * task runs the top frame's task has recorded what this document wants.
  */
 
 import {
@@ -18,11 +27,61 @@ import {
     toggleFlag,
     toggleListEntry
 } from './common/settings.js';
-import {buildCss, buildShadowCss, needsPageAgent} from './common/css.js';
+import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
 
 const ICON_ON = 'icons/colors_icons.png';
 const ICON_OFF = 'icons/colors_icons_grey.png';
 const INJECTED_PREFIX = 'injected:';
+
+/* -------------------------------------------------------- one queue per tab */
+
+// Tail of the chain of tasks queued for a tab, and the sequence number of the
+// newest full resync queued for it.
+const tabTasks = new Map();
+const latestResync = new Map();
+let sequence = 0;
+
+function runOnTab(tabId, task) {
+    const previous = tabTasks.get(tabId) || Promise.resolve();
+    const next = previous.then(task, task).catch(function () {
+        // A failed task must not break the chain for the ones behind it.
+    });
+    tabTasks.set(tabId, next);
+    next.then(function () {
+        if (tabTasks.get(tabId) === next) {
+            tabTasks.delete(tabId);
+            latestResync.delete(tabId);
+        }
+    });
+    return next;
+}
+
+/**
+ * Queues a sync for a tab.
+ *
+ * A full resync is coalesced: while one waits its turn a newer one makes it
+ * pointless, and dropping it matters because the options page writes to storage
+ * on every `input` event - dragging a color picker queues dozens of them.
+ * A freshly committed frame is never coalesced; each one has its own document
+ * to style.
+ */
+function queueSync(tabId, url, freshFrameId) {
+    if (freshFrameId !== undefined) {
+        return runOnTab(tabId, function () {
+            return syncTab(tabId, url, freshFrameId);
+        });
+    }
+    const seq = ++sequence;
+    latestResync.set(tabId, seq);
+    return runOnTab(tabId, function () {
+        if (latestResync.get(tabId) !== seq) {
+            return undefined;
+        }
+        return syncTab(tabId, url);
+    });
+}
+
+/* ------------------------------------------------------------ tab plumbing */
 
 function injectedKey(tabId) {
     return INJECTED_PREFIX + tabId;
@@ -40,12 +99,15 @@ function rememberInjectedCss(tabId, css) {
     return chrome.storage.session.remove(injectedKey(tabId));
 }
 
-async function insertCss(tabId, css, frameId) {
-    const target = frameId === undefined ?
+function targetFor(tabId, frameId) {
+    return frameId === undefined ?
         {tabId: tabId, allFrames: true} :
         {tabId: tabId, frameIds: [frameId]};
+}
+
+async function insertCss(tabId, css, frameId) {
     try {
-        await chrome.scripting.insertCSS({target: target, css: css});
+        await chrome.scripting.insertCSS({target: targetFor(tabId, frameId), css: css});
     } catch (e) {
         // The frame can be gone already, or be a page we may not touch.
     }
@@ -61,21 +123,29 @@ async function removeCss(tabId, css) {
 
 /**
  * agent.js styles shadow trees (a document stylesheet cannot reach into them)
- * and tags the elements carrying a background image. It is needed whenever the
- * colors are overridden.
+ * and tags the elements carrying a background of their own.
+ *
+ * Both injections ask for `injectImmediately`. Without it chrome.scripting runs
+ * a script at `document_idle`, while the document stylesheet paints every
+ * element with the chosen background from the first paint on: the see-through
+ * layers a page stacks over its content - a headline over a hero banner, the
+ * controls over a video - would stay opaque until the page went idle.
  */
-async function startAgent(tabId, shadowCss, frameId) {
-    const target = frameId === undefined ?
-        {tabId: tabId, allFrames: true} :
-        {tabId: tabId, frameIds: [frameId]};
+async function startAgent(tabId, shadowCss, probe, frameId) {
+    const target = targetFor(tabId, frameId);
     try {
-        await chrome.scripting.executeScript({target: target, files: ['agent.js']});
         await chrome.scripting.executeScript({
             target: target,
-            args: [shadowCss],
-            func: function (css) {
+            files: ['agent.js'],
+            injectImmediately: true
+        });
+        await chrome.scripting.executeScript({
+            target: target,
+            args: [shadowCss, probe],
+            injectImmediately: true,
+            func: function (css, measure) {
                 if (window.__changeColorsAgent) {
-                    window.__changeColorsAgent.setCss(css);
+                    window.__changeColorsAgent.setCss(css, measure);
                 }
             }
         });
@@ -88,6 +158,7 @@ async function stopAgent(tabId) {
     try {
         await chrome.scripting.executeScript({
             target: {tabId: tabId, allFrames: true},
+            injectImmediately: true,
             func: function () {
                 if (window.__changeColorsAgent) {
                     window.__changeColorsAgent.stop();
@@ -111,91 +182,119 @@ async function setIcon(tabId, active) {
     }
 }
 
+/** What the current settings ask for on one URL. */
+async function wantedFor(url) {
+    const settings = await getSettings();
+    const state = getOverrideState(settings, url);
+    if (!state.active) {
+        return {css: null, shadowCss: null, probe: false};
+    }
+    return {
+        css: buildCss(settings),
+        shadowCss: needsPageAgent(settings) ? buildShadowCss(settings) : null,
+        probe: needsBackgroundProbe(settings)
+    };
+}
+
 /**
- * Brings a tab in line with the current settings.
+ * Brings a tab in line with the current settings. Runs on the tab's queue, so
+ * it has the tab to itself for the whole of its read-modify-write.
+ *
  * `freshFrameId` is set when a document (or sub frame) has just committed: the
  * old stylesheet went away with the old document, so it only needs injecting.
  */
 async function syncTab(tabId, url, freshFrameId) {
     if (!isSupportedUrl(url)) {
+        if (freshFrameId === 0 || freshFrameId === undefined) {
+            await rememberInjectedCss(tabId, null);
+        }
         await setIcon(tabId, false);
         return;
     }
 
-    const settings = await getSettings();
-    const state = getOverrideState(settings, url);
-    const wantedCss = state.active ? buildCss(settings) : null;
-    const shadowCss = state.active && needsPageAgent(settings) ? buildShadowCss(settings) : null;
-    await setIcon(tabId, state.active);
+    const wanted = await wantedFor(url);
+    await setIcon(tabId, Boolean(wanted.css));
 
     if (freshFrameId !== undefined) {
-        if (wantedCss) {
-            await insertCss(tabId, wantedCss, freshFrameId);
-        }
-        if (shadowCss !== null) {
-            await startAgent(tabId, shadowCss, freshFrameId);
-        }
+        // What this document wants is recorded before anything is injected, so
+        // a sub frame committing while the agent is still being injected reads
+        // this navigation's stylesheet rather than the previous page's.
         if (freshFrameId === 0) {
-            await rememberInjectedCss(tabId, wantedCss);
+            await rememberInjectedCss(tabId, wanted.css);
+        }
+        if (wanted.css) {
+            await insertCss(tabId, wanted.css, freshFrameId);
+        }
+        if (wanted.shadowCss !== null) {
+            await startAgent(tabId, wanted.shadowCss, wanted.probe, freshFrameId);
         }
         return;
     }
 
     const injectedCss = await getInjectedCss(tabId);
-    if (injectedCss === wantedCss) {
-        return;
+    if (injectedCss !== wanted.css) {
+        if (injectedCss) {
+            await removeCss(tabId, injectedCss);
+        }
+        // Recorded before the insert, for the same reason as above.
+        await rememberInjectedCss(tabId, wanted.css);
+        if (wanted.css) {
+            await insertCss(tabId, wanted.css);
+        }
     }
-    if (injectedCss) {
-        await removeCss(tabId, injectedCss);
-    }
-    if (wantedCss) {
-        await insertCss(tabId, wantedCss);
-    }
-    if (shadowCss !== null) {
-        await startAgent(tabId, shadowCss);
+    if (wanted.shadowCss !== null) {
+        await startAgent(tabId, wanted.shadowCss, wanted.probe);
     } else {
         await stopAgent(tabId);
     }
-    await rememberInjectedCss(tabId, wantedCss);
 }
 
 async function syncAllTabs() {
     const tabs = await chrome.tabs.query({});
     await Promise.all(tabs.map(function (tab) {
-        return syncTab(tab.id, tab.url);
+        return queueSync(tab.id, tab.url);
     }));
 }
 
 async function syncActiveTab(tabId) {
     try {
         const tab = await chrome.tabs.get(tabId);
-        await syncTab(tab.id, tab.url);
+        await queueSync(tab.id, tab.url);
     } catch (e) {
         // Tab is gone.
     }
 }
 
-chrome.webNavigation.onCommitted.addListener(async function (details) {
+/**
+ * A frame commits after its parent has, so queueing here - synchronously, in
+ * listener order - puts a sub frame behind the top frame's task, and it reads
+ * the stylesheet that task recorded.
+ */
+chrome.webNavigation.onCommitted.addListener(function (details) {
     if (details.frameId === 0) {
-        await syncTab(details.tabId, details.url, 0);
+        queueSync(details.tabId, details.url, 0);
         return;
     }
-    // Sub frames inherit the decision taken for the top level document.
-    const injectedCss = await getInjectedCss(details.tabId);
-    if (injectedCss) {
+    runOnTab(details.tabId, async function () {
+        // Sub frames inherit the decision taken for the top level document.
+        const injectedCss = await getInjectedCss(details.tabId);
+        if (!injectedCss) {
+            return;
+        }
         await insertCss(details.tabId, injectedCss, details.frameId);
         const settings = await getSettings();
         if (needsPageAgent(settings)) {
-            await startAgent(details.tabId, buildShadowCss(settings), details.frameId);
+            await startAgent(details.tabId, buildShadowCss(settings),
+                needsBackgroundProbe(settings), details.frameId);
         }
-    }
+    });
 });
 
 // Single page applications change the URL without committing a new document,
 // which can flip a per-page override on or off.
 chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
     if (details.frameId === 0) {
-        syncTab(details.tabId, details.url);
+        queueSync(details.tabId, details.url);
     }
 });
 
@@ -205,11 +304,13 @@ chrome.tabs.onActivated.addListener(function (activeInfo) {
 
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
     if (changeInfo.status === 'complete' || changeInfo.url) {
-        syncTab(tabId, tab.url);
+        queueSync(tabId, tab.url);
     }
 });
 
 chrome.tabs.onRemoved.addListener(function (tabId) {
+    tabTasks.delete(tabId);
+    latestResync.delete(tabId);
     chrome.storage.session.remove(injectedKey(tabId));
 });
 

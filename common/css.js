@@ -147,7 +147,24 @@ export function buildShadowCss(settings) {
     return build(settings, SHADOW_SCOPE);
 }
 
-/** Whether the styling needs agent.js to run in the page. */
+/**
+ * Whether the styling needs agent.js to run in the page.
+ *
+ * Everything the stylesheet does - colors, the font, hiding images and plugin
+ * objects - stops at a shadow boundary, so a shadow tree is left untouched
+ * unless the agent adopts the rules into it. Someone who keeps the page colors
+ * and only changes the font still needs it.
+ */
 export function needsPageAgent(settings) {
+    return !settings.DefaultBrowserColor || !settings.DefaultBrowserFont ||
+        !settings.ShowImage || !settings.ShowFlash;
+}
+
+/**
+ * Whether the agent also has to measure each element's own background. Only
+ * the color override paints elements, so a font-only override gets the agent
+ * without the cost of measuring the page.
+ */
+export function needsBackgroundProbe(settings) {
     return !settings.DefaultBrowserColor;
 }

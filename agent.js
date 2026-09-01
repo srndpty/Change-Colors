@@ -13,8 +13,13 @@
  *
  * 2. It styles shadow trees. A stylesheet injected in the document never
  *    crosses a shadow boundary, so components built with shadow DOM keep the
- *    colors their own styles give them. The same rules, written around `:host`,
- *    are adopted by every shadow root.
+ *    colors, the font and the images their own styles give them. The same
+ *    rules, written around `:host`, are adopted by every shadow root, and every
+ *    shadow root found is watched for changes of its own - the document's
+ *    observer cannot see inside one.
+ *
+ * Only the first job needs the page measured; a font-only override gets the
+ * agent for its shadow trees and skips the measuring entirely.
  */
 (function () {
     const CLEAR = 'data-changecolors-clear';
@@ -22,7 +27,18 @@
     // Anything this translucent reads as an overlay rather than a surface.
     const SOLID_ALPHA = 0.9;
     const FLUSH_DELAY = 100;
+    // A flush walks at most this many elements; what is left over is picked up
+    // by the next one, right away.
     const MAX_PER_FLUSH = 6000;
+    const CONTINUE_DELAY = 16;
+
+    const OBSERVED = {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ['class', 'style']
+    };
 
     if (window.__changeColorsAgent) {
         window.__changeColorsAgent.rescan();
@@ -31,11 +47,16 @@
 
     let sheet = null;
     let sheetCss = '';
+    // Whether the stylesheet paints backgrounds, and elements therefore have to
+    // be measured.
+    let measuring = true;
     const styledRoots = new Set();
+    const observedRoots = new Set();
 
     /* ------------------------------------------------------- shadow trees */
 
     function adopt(root) {
+        observeRoot(root);
         try {
             if (sheet) {
                 if (root.adoptedStyleSheets.indexOf(sheet) === -1) {
@@ -59,8 +80,27 @@
         styledRoots.add(root);
     }
 
-    function setCss(css) {
+    /**
+     * A shadow tree's changes are invisible to an observer watching the
+     * document, so each root found gets watched itself. That covers a component
+     * rendering its content after it is attached, which the periodic rescans
+     * below only caught while they lasted.
+     */
+    function observeRoot(root) {
+        if (observedRoots.has(root)) {
+            return;
+        }
+        try {
+            observer.observe(root, OBSERVED);
+            observedRoots.add(root);
+        } catch (e) {
+            // Root is gone.
+        }
+    }
+
+    function setCss(css, measure) {
         sheetCss = css;
+        measuring = measure !== false;
         if (!sheet) {
             try {
                 sheet = new CSSStyleSheet();
@@ -126,54 +166,95 @@
         if (element === document.documentElement || element === document.body) {
             return;
         }
-        if (seen.has(element)) {
+        if (seen.has(element) || !element.isConnected) {
             return;
         }
         seen.add(element);
         batch.push(element);
     }
 
-    function collect(root, batch, seen) {
-        const elements = root.querySelectorAll('*');
-        for (let i = 0; i < elements.length && batch.length < MAX_PER_FLUSH; i++) {
-            const element = elements[i];
-            want(element, batch, seen);
-            if (element.shadowRoot) {
-                adopt(element.shadowRoot);
-                collect(element.shadowRoot, batch, seen);
-            }
-        }
-    }
-
-    // Subtrees to walk (new content), and single elements to re-check (a
-    // restyled element - walking its subtree would be wasted work).
+    // Subtrees to walk (new content, or a subtree whose styling may have
+    // changed), and single elements to re-check.
     const pendingRoots = new Set();
     const pendingElements = new Set();
+    // Walks left unfinished by a flush that ran out of budget.
+    const walks = [];
     let timer = null;
 
+    function makeWalk(root) {
+        return {
+            root: root,
+            walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT),
+            started: false
+        };
+    }
+
+    /**
+     * Measures and styles what is pending, up to MAX_PER_FLUSH elements. A
+     * bigger subtree than that is not dropped: the walk is kept where it
+     * stopped and continued in the next flush, which is what keeps the deep
+     * DOM of a site like YouTube or Twitch measured all the way down instead of
+     * only for its first few thousand elements.
+     */
     function flush() {
         timer = null;
         const batch = [];
         const seen = new Set();
+        let budget = MAX_PER_FLUSH;
+
+        function handle(element) {
+            budget--;
+            if (element.shadowRoot) {
+                adopt(element.shadowRoot);
+                walks.push(makeWalk(element.shadowRoot));
+            }
+            if (measuring) {
+                want(element, batch, seen);
+            }
+        }
 
         pendingElements.forEach(function (element) {
-            if (element.isConnected) {
+            // Checked here as well, because a component can attach its shadow
+            // root long after the rescans below have stopped.
+            if (element.shadowRoot && !observedRoots.has(element.shadowRoot)) {
+                adopt(element.shadowRoot);
+                walks.push(makeWalk(element.shadowRoot));
+            }
+            if (measuring) {
                 want(element, batch, seen);
             }
         });
         pendingElements.clear();
 
         pendingRoots.forEach(function (root) {
-            if (root.isConnected !== false && batch.length < MAX_PER_FLUSH) {
-                if (root.nodeType === Node.ELEMENT_NODE) {
-                    want(root, batch, seen);
-                }
-                collect(root, batch, seen);
+            if (root.isConnected !== false) {
+                walks.push(makeWalk(root));
             }
         });
         pendingRoots.clear();
 
+        while (walks.length && budget > 0) {
+            const walk = walks[0];
+            if (!walk.started) {
+                walk.started = true;
+                if (walk.root.nodeType === Node.ELEMENT_NODE) {
+                    handle(walk.root);
+                }
+            }
+            let node = null;
+            while (budget > 0 && (node = walk.walker.nextNode())) {
+                handle(node);
+            }
+            if (budget > 0) {
+                walks.shift();
+            }
+        }
+
         measure(batch);
+
+        if (walks.length) {
+            timer = setTimeout(flush, CONTINUE_DELAY);
+        }
     }
 
     function wake() {
@@ -226,39 +307,55 @@
                 });
                 continue;
             }
-            if (record.target.nodeType !== Node.ELEMENT_NODE) {
+            if (!measuring || record.target.nodeType !== Node.ELEMENT_NODE) {
                 continue;
             }
             if (record.attributeName === 'style') {
+                const before = inlineBackground(record.oldValue);
+                const after = inlineBackground(record.target.getAttribute('style'));
                 // Inline styles change every frame on things like a volume
                 // slider or a progress bar. Ignore those unless a background
                 // declaration (or a custom property it can use) changed.
-                if (inlineBackground(record.oldValue) ===
-                        inlineBackground(record.target.getAttribute('style'))) {
+                if (before === after) {
                     continue;
                 }
+                // A custom property is inherited, so a descendant's background
+                // can be built from the one that just changed.
+                if (before.indexOf('--') !== -1 || after.indexOf('--') !== -1) {
+                    scheduleSubtree(record.target);
+                    continue;
+                }
+                scheduleElement(record.target);
+                continue;
             }
-            // A class change can bring a background with it, but only for the
-            // element itself - its subtree is not affected and is left alone.
-            scheduleElement(record.target);
+            // A class change usually brings a background with it, and rules
+            // like `.dark .card {...}` mean it brings one to the subtree as
+            // well - a theme switch or an expanding menu would otherwise leave
+            // stale verdicts behind. The walk is bounded per flush, so a large
+            // subtree costs time rather than responsiveness.
+            scheduleSubtree(record.target);
         }
     });
 
     function start() {
         rescan();
-        observer.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeOldValue: true,
-            attributeFilter: ['class', 'style']
-        });
+        observer.observe(document.documentElement, OBSERVED);
         // Shadow roots are often attached, and backgrounds often applied, after
-        // the first pass, and changes inside a shadow tree are invisible to the
-        // observer above.
+        // the first pass. Each root found is watched from then on; these
+        // rescans are what finds the ones attached later.
         window.addEventListener('load', rescan, {once: true});
         [500, 2000, 5000].forEach(function (delay) {
             setTimeout(rescan, delay);
+        });
+    }
+
+    function cleanAttributes(root) {
+        if (!root || !root.querySelectorAll) {
+            return;
+        }
+        root.querySelectorAll('[' + CLEAR + '],[' + PROBE + ']').forEach(function (element) {
+            element.removeAttribute(CLEAR);
+            element.removeAttribute(PROBE);
         });
     }
 
@@ -267,10 +364,14 @@
         rescan: rescan,
         stop: function () {
             observer.disconnect();
+            observedRoots.clear();
             if (timer !== null) {
                 clearTimeout(timer);
                 timer = null;
             }
+            walks.length = 0;
+            pendingRoots.clear();
+            pendingElements.clear();
             styledRoots.forEach(function (root) {
                 try {
                     root.adoptedStyleSheets = root.adoptedStyleSheets.filter(function (adopted) {
@@ -283,12 +384,11 @@
                 if (style) {
                     style.remove();
                 }
+                // Tags set inside a shadow tree are out of the document's reach.
+                cleanAttributes(root);
             });
             styledRoots.clear();
-            document.querySelectorAll('[' + CLEAR + '],[' + PROBE + ']').forEach(function (element) {
-                element.removeAttribute(CLEAR);
-                element.removeAttribute(PROBE);
-            });
+            cleanAttributes(document);
             delete window.__changeColorsAgent;
         }
     };
