@@ -13,13 +13,12 @@
 
 import {
     getSettings,
-    buildCss,
     getOverrideState,
     isSupportedUrl,
-    needsBackgroundMarker,
     toggleFlag,
     toggleListEntry
 } from './common/settings.js';
+import {buildCss, buildShadowCss, needsPageAgent} from './common/css.js';
 
 const ICON_ON = 'icons/colors_icons.png';
 const ICON_OFF = 'icons/colors_icons_grey.png';
@@ -61,28 +60,37 @@ async function removeCss(tabId, css) {
 }
 
 /**
- * marker.js tags the elements carrying a background image so the stylesheet can
- * keep the content drawn on top of them transparent. It is only needed while the
- * colors are overridden and images are shown.
+ * agent.js styles shadow trees (a document stylesheet cannot reach into them)
+ * and tags the elements carrying a background image. It is needed whenever the
+ * colors are overridden.
  */
-async function startMarker(tabId, frameId) {
+async function startAgent(tabId, shadowCss, frameId) {
     const target = frameId === undefined ?
         {tabId: tabId, allFrames: true} :
         {tabId: tabId, frameIds: [frameId]};
     try {
-        await chrome.scripting.executeScript({target: target, files: ['marker.js']});
+        await chrome.scripting.executeScript({target: target, files: ['agent.js']});
+        await chrome.scripting.executeScript({
+            target: target,
+            args: [shadowCss],
+            func: function (css) {
+                if (window.__changeColorsAgent) {
+                    window.__changeColorsAgent.setCss(css);
+                }
+            }
+        });
     } catch (e) {
         // Frame gone, or a document we may not script.
     }
 }
 
-async function stopMarker(tabId) {
+async function stopAgent(tabId) {
     try {
         await chrome.scripting.executeScript({
             target: {tabId: tabId, allFrames: true},
             func: function () {
-                if (window.__changeColorsMarker) {
-                    window.__changeColorsMarker.stop();
+                if (window.__changeColorsAgent) {
+                    window.__changeColorsAgent.stop();
                 }
             }
         });
@@ -117,15 +125,15 @@ async function syncTab(tabId, url, freshFrameId) {
     const settings = await getSettings();
     const state = getOverrideState(settings, url);
     const wantedCss = state.active ? buildCss(settings) : null;
-    const wantsMarker = state.active && needsBackgroundMarker(settings);
+    const shadowCss = state.active && needsPageAgent(settings) ? buildShadowCss(settings) : null;
     await setIcon(tabId, state.active);
 
     if (freshFrameId !== undefined) {
         if (wantedCss) {
             await insertCss(tabId, wantedCss, freshFrameId);
         }
-        if (wantsMarker) {
-            await startMarker(tabId, freshFrameId);
+        if (shadowCss !== null) {
+            await startAgent(tabId, shadowCss, freshFrameId);
         }
         if (freshFrameId === 0) {
             await rememberInjectedCss(tabId, wantedCss);
@@ -143,10 +151,10 @@ async function syncTab(tabId, url, freshFrameId) {
     if (wantedCss) {
         await insertCss(tabId, wantedCss);
     }
-    if (wantsMarker) {
-        await startMarker(tabId);
+    if (shadowCss !== null) {
+        await startAgent(tabId, shadowCss);
     } else {
-        await stopMarker(tabId);
+        await stopAgent(tabId);
     }
     await rememberInjectedCss(tabId, wantedCss);
 }
@@ -177,8 +185,8 @@ chrome.webNavigation.onCommitted.addListener(async function (details) {
     if (injectedCss) {
         await insertCss(details.tabId, injectedCss, details.frameId);
         const settings = await getSettings();
-        if (needsBackgroundMarker(settings)) {
-            await startMarker(details.tabId, details.frameId);
+        if (needsPageAgent(settings)) {
+            await startAgent(details.tabId, buildShadowCss(settings), details.frameId);
         }
     }
 });

@@ -6,7 +6,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {DEFAULTS, buildCss} from '../common/settings.js';
+import {DEFAULTS} from '../common/settings.js';
+import {buildCss, buildShadowCss} from '../common/css.js';
 import {fileURLToPath} from 'node:url';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -14,6 +15,8 @@ const PORT = 8124;
 
 const PAGE = `<!doctype html><html><head><style>
 #deep { background: #ffffff; }
+/* The kind of declaration that used to beat the extension. */
+#stubborn { color: #0f0f0f !important; background-color: #ffffff !important; }
 </style></head><body style="background:#ffffff;color:#111">
 <h1 id="h">hello</h1>
 <div id="outer" style="background:#fff"><div id="mid" style="background:#fff">
@@ -23,12 +26,25 @@ const PAGE = `<!doctype html><html><head><style>
   </div>
 </div></div>
 <div id="menu" style="background:#ffffff">dropdown</div>
+<div id="stubborn">styled with !important by the site</div>
 <div id="hero" style="width:400px;height:200px;background-image:url(/hero.gif);background-size:cover;background-color:#fff">
   <h2 id="heroText" style="background:#ffffff">headline over the banner</h2>
 </div>
 <div id="placeholder" style="width:400px;height:200px;background-image:url(data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==);background-color:#fff"><span id="placeholderText">lazy</span></div>
 <img id="img" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" />
 <a id="a" href="https://example.com/">link</a>
+<div id="widget"></div>
+<script>
+  // A component built with shadow DOM, styled the way a light-theme design
+  // system does it. A document stylesheet cannot reach inside.
+  const host = document.getElementById('widget');
+  const root = host.attachShadow({mode: 'open'});
+  root.innerHTML = '<style>:host{background:#fff}span{color:#0f0f0f;background:#ffffff}</style>' +
+      '<span id="shadowText">sidebar entry</span><div id="nested"></div>';
+  const nestedHost = root.getElementById('nested');
+  const nestedRoot = nestedHost.attachShadow({mode: 'open'});
+  nestedRoot.innerHTML = '<style>b{color:#0f0f0f;background:#fff}</style><b id="nestedText">nested</b>';
+</script>
 </body></html>`;
 
 const PIXEL = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64');
@@ -116,6 +132,8 @@ try {
     check('heading text color', await color('h'), 'rgb(232, 232, 232)');
     check('link color', await color('a'), 'rgb(46, 121, 219)');
     check('unrelated element stays opaque', await bg('menu'), 'rgb(8, 8, 8)');
+    check('site !important rule on an id is overridden', await color('stubborn'), 'rgb(232, 232, 232)');
+    check('site !important background on an id is overridden', await bg('stubborn'), 'rgb(8, 8, 8)');
     check('font override applied', await evaluate(sessionId, 'getComputedStyle(document.body).fontFamily'), 'Georgia, sans-serif');
     check('font size override applied', await evaluate(sessionId, 'getComputedStyle(document.body).fontSize'), '18.6667px');
 
@@ -131,7 +149,7 @@ try {
     // Before marker.js runs, the headline is painted over the banner.
     check('headline over the banner is opaque without the marker', await bg('heroText'), 'rgb(8, 8, 8)');
 
-    const markerSource = fs.readFileSync(fileURLToPath(new URL('../marker.js', import.meta.url)), 'utf8');
+    const markerSource = fs.readFileSync(fileURLToPath(new URL('../agent.js', import.meta.url)), 'utf8');
     await evaluate(sessionId, markerSource);
     await sleep(1200);
 
@@ -153,10 +171,33 @@ try {
     await sleep(1200);
     check('banner added after load is marked', await bg('lateText'), 'rgba(0, 0, 0, 0)');
 
-    await evaluate(sessionId, 'window.__changeColorsMarker.stop()');
-    check('stopping the marker removes its attributes', await evaluate(sessionId,
+    // Shadow trees: unreachable from the document stylesheet, so the agent has
+    // to adopt the rules into every shadow root.
+    const shadowText = 'document.getElementById("widget").shadowRoot.getElementById("shadowText")';
+    const nestedText = 'document.getElementById("widget").shadowRoot.getElementById("nested").shadowRoot.getElementById("nestedText")';
+    check('shadow tree text is untouched before the agent styles it',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
+
+    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
+    await sleep(1200);
+
+    check('shadow tree text takes the chosen color',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(232, 232, 232)');
+    check('shadow tree background is overridden',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).backgroundColor`), 'rgb(8, 8, 8)');
+    check('shadow host background is overridden',
+        await bg('widget'), 'rgb(8, 8, 8)');
+    check('nested shadow tree is styled too',
+        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), 'rgb(232, 232, 232)');
+
+    await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
+    check('stopping the agent removes its attributes', await evaluate(sessionId,
         'document.querySelectorAll("[data-changecolors-bgimage]").length'), 0);
+    check('stopping the agent restores shadow tree colors',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
+
     await evaluate(sessionId, markerSource);
+    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
     await sleep(1200);
 
     // Hiding images must still work.

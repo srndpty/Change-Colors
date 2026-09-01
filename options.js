@@ -2,7 +2,8 @@
  * Options page. Reads and writes chrome.storage.local directly; the service
  * worker watches storage and re-applies the styling to open tabs.
  */
-import {getSettings, saveSettings, cssFontFamily} from './common/settings.js';
+import {getSettings, saveSettings} from './common/settings.js';
+import {cssFontFamily} from './common/css.js';
 import {FONTS, createFontDetector} from './libs/font_detect.js';
 
 let settings = null;
