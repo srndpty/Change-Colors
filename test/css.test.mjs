@@ -41,6 +41,7 @@ const PAGE = `<!doctype html><html><head><style>
 </div>
 
 <div id="scrim" style="background:rgba(255,255,255,0.5)">translucent</div>
+<div id="dynamic">dynamic background</div>
 
 <img id="img" src="/hero.gif" width="200" height="120" />
 <a id="a" href="https://example.com/">link</a>
@@ -160,11 +161,8 @@ try {
     // Without the agent everything is painted, which is what keeps a page
     // readable when the agent cannot run.
     check('without the agent, elements are painted', await bg('ripple'), DARK);
-    // Media stays visible even in that fallback.
-    check('video element transparent', await bg('v'), CLEAR);
-    check('overlay above the video transparent', await bg('videoOverlay'), CLEAR);
-    check('player container transparent', await bg('player'), CLEAR);
-    check('great-grandparent of the video transparent', await bg('outer'), CLEAR);
+    // Media itself is never painted, even in that fallback.
+    check('video element is never painted', await bg('v'), CLEAR);
 
     /* ------------------------------------------------------- with the agent */
 
@@ -174,11 +172,23 @@ try {
     await sleep(1000);
 
     check('transparent overlay over a label is cleared', await bg('ripple'), CLEAR);
+    check('transparent overlay over a video is cleared', await bg('videoOverlay'), CLEAR);
+    check('video element stays unpainted', await bg('v'), CLEAR);
+    check('a player container with its own background keeps one', await bg('player'), DARK);
     check('the label under it keeps its color', await color('entryLabel'), TEXT);
     check('headline over a banner is cleared', await bg('heroText'), CLEAR);
     check('element with a solid background keeps the chosen one', await bg('menu'), DARK);
     check('translucent overlay is cleared', await bg('scrim'), CLEAR);
     check('body keeps the chosen background', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), DARK);
+
+    // A change shortly after the initial scan must not be lost. This guards a
+    // previous throttle that skipped the mutation without retrying it later.
+    await evaluate(sessionId, 'document.getElementById("dynamic").style.backgroundColor = "#fff"');
+    await sleep(400);
+    check('a newly assigned inline background is remeasured', await bg('dynamic'), DARK);
+    await evaluate(sessionId, 'document.getElementById("dynamic").style.removeProperty("background-color")');
+    await sleep(400);
+    check('removing an inline background makes the element clear again', await bg('dynamic'), CLEAR);
 
     // Dynamically added content is measured too.
     await evaluate(sessionId, `(() => {

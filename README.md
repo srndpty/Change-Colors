@@ -37,6 +37,11 @@ runs on Manifest V3, with the same features and the same settings.
   measurement, and tags the see-through ones so the stylesheet clears them
   again. Painting first and clearing afterwards keeps a page readable even
   where the agent cannot run.
+- Fixed: **busy pages such as Twitch became sluggish while the override was
+  active**. Deep `:has()` selector chains made Chrome recalculate styles for
+  most of the document whenever live chat or player controls changed. Media is
+  now guarded without ancestor `:has()` selectors, and the page agent only
+  remeasures the changed element instead of repeatedly walking its subtree.
 - Fixed: **CSS background images were wiped out**, which turned hero banners
   into flat dark rectangles. Background images now follow the "Show images?"
   option, so they are kept by default and only removed when you turn images off.
@@ -80,6 +85,7 @@ runs on Manifest V3, with the same features and the same settings.
 | `agent.js`           | Styles shadow trees and tags background images, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
+| `test/perf.test.mjs` | Guards style recalculation cost on a synthetic busy page    |
 
 ## Development
 
@@ -90,6 +96,13 @@ The stylesheet is checked against a real layout in headless Chrome:
 
 ```
 npm test
+```
+
+The performance regression test is separate so normal test results are not
+affected by machine load:
+
+```
+npm run test:perf
 ```
 
 Set `CHROME` if Chrome is not at the default Windows install path.

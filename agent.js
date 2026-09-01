@@ -122,59 +122,98 @@
 
     /* ------------------------------------------------------------- walking */
 
-    function collect(root, into, budget) {
+    function want(element, batch, seen) {
+        if (element === document.documentElement || element === document.body) {
+            return;
+        }
+        if (seen.has(element)) {
+            return;
+        }
+        seen.add(element);
+        batch.push(element);
+    }
+
+    function collect(root, batch, seen) {
         const elements = root.querySelectorAll('*');
-        for (let i = 0; i < elements.length && into.length < budget; i++) {
+        for (let i = 0; i < elements.length && batch.length < MAX_PER_FLUSH; i++) {
             const element = elements[i];
-            if (element !== document.documentElement && element !== document.body) {
-                into.push(element);
-            }
+            want(element, batch, seen);
             if (element.shadowRoot) {
                 adopt(element.shadowRoot);
-                collect(element.shadowRoot, into, budget);
+                collect(element.shadowRoot, batch, seen);
             }
         }
     }
 
-    function scan(roots) {
-        const elements = [];
-        for (const root of roots) {
-            if (root.isConnected === false) {
-                continue;
-            }
-            if (root.nodeType === Node.ELEMENT_NODE &&
-                    root !== document.documentElement && root !== document.body) {
-                elements.push(root);
-            }
-            collect(root, elements, MAX_PER_FLUSH);
-            if (elements.length >= MAX_PER_FLUSH) {
-                break;
-            }
-        }
-        measure(elements);
-    }
-
-    const pending = new Set();
+    // Subtrees to walk (new content), and single elements to re-check (a
+    // restyled element - walking its subtree would be wasted work).
+    const pendingRoots = new Set();
+    const pendingElements = new Set();
     let timer = null;
 
     function flush() {
         timer = null;
-        const roots = Array.from(pending);
-        pending.clear();
-        scan(roots);
+        const batch = [];
+        const seen = new Set();
+
+        pendingElements.forEach(function (element) {
+            if (element.isConnected) {
+                want(element, batch, seen);
+            }
+        });
+        pendingElements.clear();
+
+        pendingRoots.forEach(function (root) {
+            if (root.isConnected !== false && batch.length < MAX_PER_FLUSH) {
+                if (root.nodeType === Node.ELEMENT_NODE) {
+                    want(root, batch, seen);
+                }
+                collect(root, batch, seen);
+            }
+        });
+        pendingRoots.clear();
+
+        measure(batch);
     }
 
-    function schedule(root) {
-        pending.add(root);
+    function wake() {
         if (timer === null) {
             timer = setTimeout(flush, FLUSH_DELAY);
         }
     }
 
+    function scheduleSubtree(root) {
+        pendingRoots.add(root);
+        wake();
+    }
+
+    function scheduleElement(element) {
+        pendingElements.add(element);
+        wake();
+    }
+
     function rescan() {
         if (document.documentElement) {
-            schedule(document.documentElement);
+            scheduleSubtree(document.documentElement);
         }
+    }
+
+    /**
+     * Returns the inline declarations that can alter a background. Comparing
+     * these lets us ignore animation-frame updates to unrelated properties
+     * such as a volume slider's width. Custom properties are included because
+     * a background declaration may refer to one with var().
+     */
+    function inlineBackground(cssText) {
+        return String(cssText || '').split(';').map(function (declaration) {
+            const colon = declaration.indexOf(':');
+            if (colon === -1) {
+                return '';
+            }
+            const property = declaration.slice(0, colon).trim().toLowerCase();
+            return property === 'background' || property.indexOf('background-') === 0 ||
+                    property.indexOf('--') === 0 ? declaration.trim() : '';
+        }).filter(Boolean).sort().join(';');
     }
 
     const observer = new MutationObserver(function (records) {
@@ -182,13 +221,26 @@
             if (record.type === 'childList') {
                 record.addedNodes.forEach(function (node) {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        schedule(node);
+                        scheduleSubtree(node);
                     }
                 });
-            } else if (record.target.nodeType === Node.ELEMENT_NODE) {
-                // A class or style change is how a page repaints an element.
-                schedule(record.target);
+                continue;
             }
+            if (record.target.nodeType !== Node.ELEMENT_NODE) {
+                continue;
+            }
+            if (record.attributeName === 'style') {
+                // Inline styles change every frame on things like a volume
+                // slider or a progress bar. Ignore those unless a background
+                // declaration (or a custom property it can use) changed.
+                if (inlineBackground(record.oldValue) ===
+                        inlineBackground(record.target.getAttribute('style'))) {
+                    continue;
+                }
+            }
+            // A class change can bring a background with it, but only for the
+            // element itself - its subtree is not affected and is left alone.
+            scheduleElement(record.target);
         }
     });
 
@@ -198,6 +250,7 @@
             childList: true,
             subtree: true,
             attributes: true,
+            attributeOldValue: true,
             attributeFilter: ['class', 'style']
         });
         // Shadow roots are often attached, and backgrounds often applied, after

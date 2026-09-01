@@ -61,17 +61,17 @@ function prefixed(scope, selectors, boost) {
 }
 
 /**
- * Selectors that must stay transparent so playing media remains visible, even
- * on a page where agent.js could not run.
+ * Media never takes the background color: a <video> painted over is a black
+ * rectangle. The elements a player stacks on top of it are handled by agent.js,
+ * which finds them see-through and clears them.
+ *
+ * This deliberately does not walk up from the <video> with `:has()`. That used
+ * to cover the player's container chain, and it cost a full style
+ * recalculation on every DOM change: on a page with a live chat it took the
+ * browser roughly two hundred times longer to recalculate styles.
  */
 function mediaGuard(scope) {
-    const selectors = ['video', 'audio'];
-    let path = '> video';
-    for (let depth = 0; depth < 4; depth++) {
-        selectors.push('*:has(' + path + ')', '*:has(' + path + ') *');
-        path = '> * ' + path;
-    }
-    return prefixed(scope, selectors, BOOST_OVER_BASE);
+    return prefixed(scope, ['video', 'audio'], BOOST_OVER_BASE);
 }
 
 /** Elements agent.js found to have no background of their own. */
