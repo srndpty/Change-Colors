@@ -1,0 +1,10 @@
+{
+	"name": "change-colors",
+	"version": "3.0.0",
+	"private": true,
+	"description": "Chrome extension that restyles pages according to the user's preferences.",
+	"type": "module",
+	"scripts": {
+		"test": "node test/css.test.mjs"
+	}
+}

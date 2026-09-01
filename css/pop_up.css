@@ -23,3 +23,31 @@ body
   color: #fff;
   background-image: url("../icons/overrideSelection.jpg");
 }
+#buttons
+{
+  display: flex;
+  flex-direction: column;
+}
+
+button.action_btn
+{
+  display: block;
+  box-sizing: content-box;
+  text-align: left;
+  font-family: inherit;
+}
+
+#unsupported
+{
+  color: #191919;
+  font-size: 10pt;
+  width: 200px;
+  padding: 5px;
+}
+
+#footer
+{
+  margin-top: 8px;
+  font-size: 9pt;
+  text-align: right;
+}

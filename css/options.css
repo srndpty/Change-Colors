@@ -175,9 +175,21 @@ h1
 
 .customFontRemove
 {
-  margin-top: 3px;
-  width: 10px;
-  height: 10px;
-  background-image: url("../icons/removeIcon.png");
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  text-align: center;
+  color: #a00;
+  cursor: pointer;
   float: left;
+}
+.color
+{
+  height: 24px;
+  padding: 0;
+}
+
+#editShortcuts
+{
+  margin-top: 5px;
 }
