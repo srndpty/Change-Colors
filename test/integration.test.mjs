@@ -88,8 +88,22 @@ const BIG = `<!doctype html><html><body style="background:#ffffff;color:#111">
 </script>
 </body></html>`;
 
+// A document that replaces itself as soon as it has committed. The extension
+// sees a commit for it and starts working on it, and by the time that work runs
+// the frame holds another document.
+const REDIRECT = `<!doctype html><html><body style="background:#ffffff;color:#111">
+<script>location.replace('/plain');</script>
+</body></html>`;
+
+const PLAIN = `<!doctype html><html><body style="background:#ffffff;color:#111">
+<p id="p">plain</p>
+</body></html>`;
+
 const server = http.createServer((req, res) => {
-    const body = req.url.startsWith('/frame') ? FRAME : req.url.startsWith('/big') ? BIG : PAGE;
+    const body = req.url.startsWith('/frame') ? FRAME :
+        req.url.startsWith('/big') ? BIG :
+        req.url.startsWith('/redirect') ? REDIRECT :
+        req.url.startsWith('/plain') ? PLAIN : PAGE;
     res.writeHead(200, {'Content-Type': 'text/html'});
     res.end(body);
 }).listen(PORT);
@@ -257,6 +271,28 @@ try {
     await sleep(2000);
     check('the color override comes back on the same page',
         await evaluate(sessionId, 'getComputedStyle(document.body).color'), TEXT);
+
+    /* ---------------------------------------- a document replaced right away */
+
+    // The frame keeps its id across the redirect, so work queued for the first
+    // document must not land in the one that replaced it - which is excluded
+    // from the override and has to stay the way the site wrote it. The storage
+    // write fires at the same time, queueing a sync that still carries the old
+    // URL.
+    await settings({
+        OverrideAll: true,
+        DefaultBrowserFont: true,
+        NotOverridenPages: [`http://localhost:${PORT}/plain`]
+    });
+    await sleep(1000);
+    await evaluate(sessionId, 'location.href = "/redirect"');
+    await settings({background_color: '445566'});
+    await sleep(4000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
+    check('a document that replaced another is left alone if it is excluded',
+        await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
+    check('and its elements too',
+        await evaluate(sessionId, 'getComputedStyle(document.getElementById("p")).backgroundColor'), CLEAR);
 } catch (e) {
     console.log('FAIL  integration run -> ' + e);
     results.push(false);

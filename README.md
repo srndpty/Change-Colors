@@ -31,6 +31,18 @@ runs on Manifest V3, with the same features and the same settings.
   Bursts of settings changes are coalesced to the last one, and a sub frame is
   styled behind its parent's task, so it can no longer pick up the stylesheet of
   the page it replaced.
+- Work is tied to the document it was decided for, not to the frame: a frame
+  keeps its id when it navigates, so a stylesheet meant for one page could land
+  in the page that replaced it. A freshly committed document is now named by its
+  `documentId`, work queued for a page the tab has since left is dropped, and a
+  resync re-reads the tab's current URL before deciding - a redirect into a page
+  the user excluded no longer inherits the styling of the page it replaced.
+- The service worker keeps what a tab *should* have separate from what it is
+  known to *have*. Only a successful `insertCSS` records a stylesheet as applied
+  and only a successful `removeCSS` takes it off that list, so an injection that
+  failed is retried instead of being remembered as done, and a stylesheet that
+  refused to come out stays tracked until it does - `removeCSS` needs its exact
+  text, and a stylesheet dropped from the list is one nothing can remove again.
 - `agent.js` is injected immediately rather than at `document_idle`, so the
   see-through layers a page stacks over its content are given back early
   instead of after the page settles.
@@ -49,7 +61,9 @@ runs on Manifest V3, with the same features and the same settings.
   background, with the extension's rules held off for the length of the
   measurement, and tags the see-through ones so the stylesheet clears them
   again. Painting first and clearing afterwards keeps a page readable even
-  where the agent cannot run. A document larger than one pass is measured
+  where the agent cannot run. Backgrounds written in a modern color syntax
+  (`oklch()`, `lab()`, `color()`) are read correctly, instead of being taken for
+  transparent and cleared. A document larger than one pass is measured
   across several passes rather than only down to its first few thousand
   elements, and a class or custom property changing on an ancestor - a theme
   switch, a menu opening - remeasures the subtree it can restyle.
@@ -67,7 +81,9 @@ runs on Manifest V3, with the same features and the same settings.
   boundary, so `agent.js` now adopts the same rules, rewritten around `:host`,
   into every shadow root, nested ones included, and watches each one for changes
   of its own. It runs for a font-only or image-hiding override too: those stop
-  at a shadow boundary just as colors do.
+  at a shadow boundary just as colors do. Switching the override off undoes the
+  styling in every shadow root it reached, and the delayed rescans it schedules
+  cannot bring a stopped agent back to life.
 - Fixed: a site's own `!important` declaration on an id or class selector used to
   win against the extension, leaving patches of unreadable text. The generated
   selectors carry specificity padding now.

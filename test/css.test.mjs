@@ -44,6 +44,10 @@ const PAGE = `<!doctype html><html><head><style>
 </div>
 
 <div id="scrim" style="background:rgba(255,255,255,0.5)">translucent</div>
+<!-- Colors a site writes in a modern syntax: getComputedStyle gives them back
+     as oklch(), not as rgb(). -->
+<div id="modern" style="background: oklch(0.85 0.1 240)">modern color</div>
+<div id="modernScrim" style="background: oklch(0.85 0.1 240 / 0.4)">modern translucent</div>
 <div id="dynamic">dynamic background</div>
 
 <!-- A background a descendant only gets through an ancestor's class... -->
@@ -187,6 +191,8 @@ try {
     check('headline over a banner is cleared', await bg('heroText'), CLEAR);
     check('element with a solid background keeps the chosen one', await bg('menu'), DARK);
     check('translucent overlay is cleared', await bg('scrim'), CLEAR);
+    check('a solid background written as oklch() is kept, not cleared', await bg('modern'), DARK);
+    check('a translucent oklch() background is cleared', await bg('modernScrim'), CLEAR);
     check('body keeps the chosen background', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), DARK);
 
     // A change shortly after the initial scan must not be lost. This guards a
@@ -230,8 +236,15 @@ try {
     // document, so each root found is watched itself.
     await evaluate(sessionId, `(() => {
         const root = document.getElementById('widget').shadowRoot;
-        root.innerHTML += '<em id="shadowLate" style="background:#fff">late</em>' +
-            '<u id="shadowLateClear">late overlay</u>';
+        // Appended, not innerHTML +=, which would rebuild the nested host and
+        // take its shadow root with it.
+        const late = document.createElement('em');
+        late.id = 'shadowLate';
+        late.style.background = '#fff';
+        const lateClear = document.createElement('u');
+        lateClear.id = 'shadowLateClear';
+        root.appendChild(late);
+        root.appendChild(lateClear);
     })()`);
     await sleep(800);
     check('content added later inside a shadow tree, with a background, is painted',
@@ -286,6 +299,23 @@ try {
         'document.getElementById("widget").shadowRoot.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
     check('stopping the agent restores shadow tree colors',
         await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
+
+    /* ------------------------------------------- stopping right after starting */
+
+    // The agent rescans the page 500ms, 2s and 5s in, to find shadow roots
+    // attached after the first pass. Those must not come back to life after the
+    // override is switched off - the page can have been handed to another agent
+    // by then.
+    await evaluate(sessionId, agentSource);
+    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
+    await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
+    await sleep(6000);
+    check('an agent stopped before its delayed rescans stays stopped', await evaluate(sessionId,
+        'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
+    check('and leaves no stylesheet in a shadow tree behind',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
+    check('and none in a nested one either',
+        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), 'rgb(15, 15, 15)');
 
     /* -------------------------------------------------------- hiding images */
 

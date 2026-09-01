@@ -47,11 +47,20 @@
 
     let sheet = null;
     let sheetCss = '';
+    // Set by stop(). The delayed rescans below outlive it, and an agent that
+    // has been stopped must not tag anything again - the page may have been
+    // handed to a new agent in the meantime.
+    let stopped = false;
     // Whether the stylesheet paints backgrounds, and elements therefore have to
     // be measured.
     let measuring = true;
+    // Every shadow root the stylesheet was put into, for the whole life of the
+    // agent: stop() has to be able to take it out of all of them, including the
+    // ones found before the last setCss().
     const styledRoots = new Set();
     const observedRoots = new Set();
+    // Timers of the delayed rescans, so stop() can cancel them.
+    const delayed = [];
 
     /* ------------------------------------------------------- shadow trees */
 
@@ -115,20 +124,59 @@
                 sheet = null;
             }
         }
-        styledRoots.clear();
+        // The roots that already have this stylesheet keep it: it is the same
+        // CSSStyleSheet object, and replaceSync() has just given it the new
+        // rules. The inventory is not cleared, because it is what stop() undoes
+        // the styling from.
         rescan();
     }
 
     /* ----------------------------------------------------- own background */
 
-    function isSeeThrough(color) {
-        const match = /^rgba?\(([^)]+)\)/.exec(color || '');
-        if (!match) {
-            return true;
+    /**
+     * The alpha of a computed color.
+     *
+     * getComputedStyle() serializes a color in the syntax it was written in, so
+     * a site using `oklch()`, `lab()` or `color()` - all of them ordinary CSS
+     * now - does not come back as `rgb()`. Every one of those puts the alpha
+     * last, after a slash; only the legacy comma syntax of rgba() and hsla()
+     * puts it fourth in the list. Anything unrecognised counts as opaque, which
+     * paints the element rather than leaving it see-through: the same fallback
+     * the stylesheet itself takes.
+     */
+    function alphaOf(color) {
+        const text = String(color || '').trim();
+        if (!text) {
+            return 1;
         }
-        const parts = match[1].split(/[,/]/);
-        const alpha = parts.length > 3 ? parseFloat(parts[3]) : 1;
-        return !(alpha >= SOLID_ALPHA);
+        if (text === 'transparent') {
+            return 0;
+        }
+        const match = /^[a-z-]+\(([^)]*)\)$/i.exec(text);
+        if (!match) {
+            return 1;
+        }
+        const body = match[1];
+        const slash = body.indexOf('/');
+        let alpha = slash === -1 ? null : body.slice(slash + 1);
+        if (alpha === null) {
+            const parts = body.split(',');
+            alpha = parts.length > 3 ? parts[3] : null;
+        }
+        if (alpha === null) {
+            return 1;
+        }
+        alpha = alpha.trim();
+        // `none` is CSS Color 4 for "no alpha component", which renders opaque.
+        const value = alpha === 'none' ? 1 : parseFloat(alpha);
+        if (!isFinite(value)) {
+            return 1;
+        }
+        return alpha.endsWith('%') ? value / 100 : value;
+    }
+
+    function isSeeThrough(color) {
+        return !(alphaOf(color) >= SOLID_ALPHA);
     }
 
     /**
@@ -258,6 +306,9 @@
     }
 
     function wake() {
+        if (stopped) {
+            return;
+        }
         if (timer === null) {
             timer = setTimeout(flush, FLUSH_DELAY);
         }
@@ -274,6 +325,9 @@
     }
 
     function rescan() {
+        if (stopped) {
+            return;
+        }
         if (document.documentElement) {
             scheduleSubtree(document.documentElement);
         }
@@ -345,7 +399,7 @@
         // rescans are what finds the ones attached later.
         window.addEventListener('load', rescan, {once: true});
         [500, 2000, 5000].forEach(function (delay) {
-            setTimeout(rescan, delay);
+            delayed.push(setTimeout(rescan, delay));
         });
     }
 
@@ -363,7 +417,11 @@
         setCss: setCss,
         rescan: rescan,
         stop: function () {
+            stopped = true;
             observer.disconnect();
+            window.removeEventListener('load', rescan);
+            delayed.forEach(clearTimeout);
+            delayed.length = 0;
             observedRoots.clear();
             if (timer !== null) {
                 clearTimeout(timer);
