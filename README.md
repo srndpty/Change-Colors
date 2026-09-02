@@ -1,0 +1,325 @@
+# Change Colors
+
+Chrome extension that restyles web pages with your own background, text and link
+colors, your own font, and optional hiding of images and plugin objects.
+
+Original source: https://github.com/Strav/Change-Colors
+
+## Release notes
+
+### 3.0.0 - Manifest V3
+
+The extension was stuck on Manifest V2 and stopped being distributable. It now
+runs on Manifest V3, with the same features and the same settings.
+
+- Manifest V3: the background page became a service worker, `page_action` became
+  `action`, and host access moved to `host_permissions`.
+- Settings moved from `localStorage` (not available to a service worker) to
+  `chrome.storage.local`. Settings saved by version 2.x are copied over once, on
+  update, through an offscreen document.
+- Styling is applied with `chrome.scripting.insertCSS` while the document
+  commits, instead of by messaging a content script. There is no content script
+  in the package any more, and the stylesheet is injected as early as the API
+  allows - in practice before the page has drawn, though nothing guarantees it;
+  sub frames are still covered.
+- Everything the service worker does to a tab is serialized on a queue of its
+  own. Four event sources (navigation, sub frame commits, tab updates and
+  settings changes) all replace a tab's stylesheet, and `removeCSS` only removes
+  a stylesheet handed back to it exactly: two overlapping swaps used to leave a
+  stylesheet in the page that nothing could remove again - dragging a color
+  picker was enough to trigger it, and the page then kept an old color for good.
+  Bursts of settings changes are coalesced to the last one, and a sub frame is
+  styled behind its parent's task, so it can no longer pick up the stylesheet of
+  the page it replaced.
+- The unit of work is a document, not a tab and not a frame. A frame keeps its
+  id when it navigates, so a stylesheet meant for one page could land in the page
+  that replaced it - a redirect into a page the user excluded would inherit the
+  styling of the page it replaced. Every injection and every removal now names a
+  `documentId`, so work decided for one document can only ever reach that
+  document. A resync works from the tab's live frames rather than from the URL it
+  was queued with, which can already be a page old.
+- Nothing a tab knows is dropped on a guess. A document the browser no longer
+  lists is not necessarily gone, a page on screen can add an iframe at any
+  moment, and each part of the record is authority for something that cannot be
+  worked out again - which document holds a stylesheet and its exact text, which
+  page a document belongs to, what its page decided. There is no count at which
+  any of that stops being worth keeping: a page with sixty sub frames put in the
+  back/forward cache would otherwise come back holding stylesheets nothing could
+  remove. What a tab knows goes when the tab goes, and what keeps that
+  affordable is that the stylesheets themselves are held once each, so a page
+  costs a few dozen bytes of document ids.
+- Nothing is put into a page until the record that says so has been stored, and
+  what is stored first is the wider claim: a document about to be given a
+  stylesheet is written down as holding both what it has and what it is about to
+  get, and marked as uncertain. A record that could not be stored leaves the page
+  untouched, which is a state that record still describes. The exact result is
+  stored afterwards and the mark comes off; that write is the only one allowed to
+  make the record say less.
+- A service worker that stops between those two writes leaves a document marked
+  uncertain, and the next one puts it back in a known state before anything else:
+  everything the record admits to comes out, including the stylesheet the page
+  should end up with, and then that one goes in. Without the mark, the record's
+  claim would be read as fact and the stylesheet would never be inserted at all.
+  The mark only comes off if the document answered: one that could not be reached
+  is still one whose contents nobody knows, and it stays uncertain until someone
+  reaches it.
+- The service worker keeps what a page *should* have separate from what each
+  document is known to *have*. A stylesheet is recorded only by an `insertCSS`
+  that succeeded and taken off only by a `removeCSS` that succeeded, and each
+  call covers exactly one document, so there is no partial success to misread: an
+  injection that failed is retried instead of being remembered as done, and a
+  stylesheet that refused to come out stays tracked until it does. `removeCSS`
+  needs the exact text, and a stylesheet forgotten while it is still in a page is
+  one nothing can remove again - so the text is kept, once for however many
+  documents share it.
+- A page coming back from the back/forward cache is not a new document: it still
+  holds the stylesheet it was left with, possibly from settings that have changed
+  since. It is given the difference rather than assumed empty, and what it was
+  left with stays removable - including when the override was turned off while it
+  was away, which also has to stop the agent it was left running.
+- A restored page brings its sub frames back already loaded. They commit nothing,
+  and `webNavigation.getAllFrames` does not list them - not even seconds later -
+  so the record keeps which page each document belongs to, independently of
+  whether anything is currently in it. That is the only way left to reach them,
+  and it is what lets a settings change while a restored page is on screen still
+  find its sub frames.
+- Moving to a page the extension does not touch no longer makes it forget the
+  stylesheets it put in the pages behind it. Their text is the only thing that
+  can take them out again, so it is kept until the tab closes.
+- One decision per page, and a tab holds more than one page: the page on screen,
+  whatever the back/forward cache is keeping, and any page being prerendered.
+  Decisions are kept per page, and a sub frame applies its own page's rather than
+  reading settings that may have moved on since.
+- A page's top frame is found through `frameType`, not `frameId === 0`. A
+  prerendered page's own top frame has a non-zero id, so it used to be read as a
+  sub frame of the page on screen and given that page's styling. Frame lists are
+  also walked down from one page's top document, because while a page replaces
+  another both are in the list at once.
+- Settings from version 2.x are only marked as migrated once they have actually
+  been read, and a late migration only fills in what has never been set here:
+  the retry that exists so a failed migration does not lose the old settings must
+  not overwrite the new ones. An offscreen document that could not be created, or that did not
+  report in time, used to count as "migration done" and lose the old settings for
+  good; it is now retried on the next browser start. Finding nothing to migrate
+  still counts as done.
+- `agent.js` is injected immediately rather than at `document_idle`, so the
+  see-through layers a page stacks over its content are given back early
+  instead of after the page settles.
+- Keyboard shortcuts use the `commands` API instead of a key handler injected in
+  every page. The defaults are unchanged (Ctrl+Shift+P / D / G); Chrome may
+  refuse a default that collides with one of its own, in which case set it at
+  `chrome://extensions/shortcuts` - the options page links there.
+- SPA navigations (`history.pushState`) are now noticed, so per-page overrides
+  apply on sites like YouTube without a reload.
+- Fixed: **anything a site stacked on top of its own content disappeared or
+  covered what was underneath**. Painting an opaque background on every element
+  also painted the see-through layers a page puts over its content, so videos
+  turned into a black rectangle, hero banners into flat dark boxes, and menu
+  entries (YouTube's sidebar) had their labels hidden by the invisible ripple
+  layer sitting over them. `agent.js` now measures each element's own
+  background, with the extension's rules held off for the length of the
+  measurement, and tags the see-through ones so the stylesheet clears them
+  again. Painting first and clearing afterwards keeps a page readable even
+  where the agent cannot run. Backgrounds written in a modern color syntax
+  (`oklch()`, `lab()`, `color()`) are read correctly, instead of being taken for
+  transparent and cleared. A document larger than one pass is measured
+  across several passes rather than only down to its first few thousand
+  elements, and a class or custom property changing on an ancestor - a theme
+  switch, a menu opening - remeasures the subtree it can restyle.
+- Fixed: **busy pages such as Twitch became sluggish while the override was
+  active**. Deep `:has()` selector chains made Chrome recalculate styles for
+  most of the document whenever live chat or player controls changed. Media is
+  now guarded without ancestor `:has()` selectors, and the page agent only
+  remeasures the changed element instead of repeatedly walking its subtree.
+- Fixed: **CSS background images were wiped out**, which turned hero banners
+  into flat dark rectangles. Background images now follow the "Show images?"
+  option, so they are kept by default and only removed when you turn images off.
+- Fixed: **text inside shadow DOM kept its own color** and became unreadable on
+  the dark background - whole parts of a page (YouTube's sidebar and its filter
+  chips, for example) looked blank. A document stylesheet never crosses a shadow
+  boundary, so `agent.js` now adopts the same rules, rewritten around `:host`,
+  into every shadow root, nested ones included, and watches each one for changes
+  of its own. It runs for a font-only or image-hiding override too: those stop
+  at a shadow boundary just as colors do. Switching the override off undoes the
+  styling in every shadow root it reached, and the delayed rescans it schedules
+  cannot bring a stopped agent back to life.
+- Fixed: **a button that said it would take the override off a page did not**.
+  A per-page or per-domain inclusion used to beat any exclusion, so a page
+  turned on individually stayed on however often "no global override on this
+  page" was pressed afterwards. What a page gets is now decided by the narrowest
+  thing said about it - the page, then the domain, then the global setting - and
+  a scope is never on both lists at once. The keyboard shortcuts make the same
+  change as the button next to them, which they also did not before: with the
+  global override on, they used to change the list that was not being read.
+- Fixed: two settings changes at once lost one of them. A change is a read of
+  the settings, an edit and a write of the whole list; the popup and the
+  shortcuts now make theirs one at a time in the service worker, and the popup's
+  buttons are disabled for the moment one takes.
+- Fixed: the page agent held on to every shadow tree it ever styled, and through
+  it to the host and the whole subtree under it, until the tab was closed. A
+  page that rebuilds its components - which is what a long-lived single page
+  application does all day - handed it the whole history of itself. Trees taken
+  out of the page are now let go of, a few hundred at a time, after something is
+  removed; one put back is styled again like anything else added to the page.
+- Fixed: a sub frame committing into a page the extension had not been able to
+  write down took the styling of whatever page the tab was showing before it -
+  a bare page with one colored iframe in it, recorded as if it were meant.
+  A frame whose parent is not recognised is now left alone until the next full
+  resync.
+- Fixed: a site's own `!important` declaration on an id or class selector used to
+  win against the extension, leaving patches of unreadable text. The generated
+  selectors carry specificity padding now - written so that it cannot match
+  anything itself, where the first version of it would have left an element out
+  of the override if the site happened to use one of the ids it names.
+- Fixed: with "use web pages colors" enabled, the generated stylesheet started
+  with the string `undefined` and the whole first rule was dropped.
+- Fixed invalid declarations in the generated CSS: `text-shadow: 0` is now
+  `text-shadow: none`, and `-webkit-text-fill-color: none` is now
+  `currentcolor`, so sites that set a text fill color no longer defeat the text
+  color you picked.
+- Fixed: a sub frame navigating made the extension evaluate the override rules
+  against the frame's URL instead of the page's.
+- Fixed: removing a custom font from the options page deleted the wrong entries.
+- The options page no longer needs jQuery or the jscolor picker (which relied on
+  `eval`, forbidden under Manifest V3). It uses native color inputs, and those
+  two libraries were dropped from the package.
+
+### 2.244
+
+- Migrated to manifest v2.
+- Reduce flashing when navigate to other website.
+
+## Layout
+
+| Path                 | Purpose                                                   |
+| -------------------- | --------------------------------------------------------- |
+| `manifest.json`      | Manifest V3 declaration                                    |
+| `background.js`      | Service worker: decides and injects the styling            |
+| `common/settings.js` | Settings model and override rules                          |
+| `popup.html/.js`     | Toolbar popup: per page, per domain and global override    |
+| `options.html/.js`   | Preferences                                                |
+| `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
+| `common/migration.js`| Carries version 2.x settings over, retried until it works   |
+| `common/record.js`   | What a tab knows                                           |
+| `common/sync.js`     | Bringing documents in line, in an order that cannot strand a stylesheet |
+| `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
+| `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
+| `libs/font_detect.js`| Detects which fonts the system has                         |
+| `test/record.test.mjs` | What a tab knows, and what it does when it cannot write it down |
+| `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
+| `test/prerender-demo.mjs` | Serves the pages for checking prerendering by hand |
+| `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
+| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
+| `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
+| `test/settings.test.mjs` | Checks that each override button does what its label says, and that two changes at once do not lose one |
+| `tools/stage.mjs`    | Copies the files that ship into `build/`                   |
+| `tools/release.mjs`  | The release gate: versions, tests, `build/` under test, the ZIP and its hash |
+| `tools/zip.mjs`      | Writes that ZIP, reproducibly                              |
+| `STORE_LISTING.md`   | The text of the store listing, and where each field comes from |
+| `PRIVACY.md`         | The privacy policy the listing links to                    |
+| `THIRD_PARTY_NOTICES.md` | What is somebody else's, under what license, and what was changed |
+
+## Development
+
+Load the folder as an unpacked extension from `chrome://extensions` with
+developer mode enabled.
+
+The stylesheet is checked against a real layout in headless Chrome, and the
+extension itself is loaded into a browser and driven the way a user drives it:
+
+```
+npm test
+```
+
+The second half needs a browser that still accepts `--load-extension`, which
+branded Google Chrome does not. Playwright's or Puppeteer's Chromium is picked
+up from the usual cache directories; otherwise point `CHROME_UNBRANDED` at one
+(`npx playwright install chromium` gets you one), or that half reports `SKIP`.
+
+The performance regression test is separate so normal test results are not
+affected by machine load:
+
+```
+npm run test:perf
+```
+
+One case cannot be automated. Chrome turns prerendering off for any tab that has
+DevTools attached - it reports `PrerenderingDisabledByDevTools` - and driving a
+browser from a test means attaching to it, so no page is ever prerendered while
+the integration test runs. It says so and skips that case rather than passing
+quietly, and the check is left to be done by hand:
+
+```
+npm run demo:prerender
+```
+
+which serves the two pages and prints the steps.
+
+Set `CHROME` to pick the browser those two use. Without it the usual install
+paths for Chrome and Chromium are tried, and if none of them is there the test
+says `SKIP` rather than failing on a path that belongs to another machine.
+
+## License and provenance
+
+This is a fork of [Strav/Change-Colors](https://github.com/Strav/Change-Colors),
+which carries no license file of its own. Permission to fork, change and publish
+it was given by the original author directly, in private correspondence rather
+than through a public license - so keep that correspondence: it is the only
+record of the permission, and it is what would be produced if the store or
+anyone else asked under what right this is published.
+
+`libs/font_detect.js` is somebody else's work under a license that does say so -
+Creative Commons Attribution-ShareAlike 2.5 - and stays under it. It keeps its
+author's notice in the file, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+says what was changed in it. That file ships with the extension.
+
+## Packaging
+
+The folder that is worked in is not the folder that ships. It also holds the
+tests, the tools and the editor's project file, none of which runs once
+installed - which is exactly why none of it should be in the package: nobody
+auditing what was shipped can tell dormant code from live code without reading
+all of it. (The packed Manifest V2 release that used to sit in `release/` is
+gone from the tree for the same reason. It is still in the history:
+`git show d72cf2f:release/change-color-2.244.crx > change-color-2.244.crx`.)
+
+```
+npm run stage
+```
+
+copies the files the extension is actually made of into `build/`, from a list
+in `tools/stage.mjs`, and checks that everything the manifest names is among
+them. `build/` is written, never edited: work in the source, check the release
+in `build/`.
+
+What the Chrome Web Store takes is a ZIP with `manifest.json` at its root - not
+a CRX, which is for loading one by hand - and
+
+```
+npm run release
+```
+
+is everything that has to be true before uploading one, in order: the versions
+in `package.json` and `manifest.json` agree, every test passes, `build/` is
+staged, **the integration test is run again against `build/` itself**, and the
+ZIP is written to `dist/` with its SHA-256 and the commit it was built from
+printed. Upload that file from the Package tab of the developer dashboard.
+
+The step that earns its place is the second integration run. The staging list
+can be complete as far as the manifest is concerned and still miss a module
+that another module imports: loaded from the source root that extension works
+perfectly, and only the packaged one is broken. During that run - and only that
+run - `$REQUIRE_BROWSER` makes a missing browser a failure instead of a skip,
+because "the tests did not fail" has to mean "the tests ran".
+
+The archive is written with a fixed timestamp on every entry, so the same
+sources give the same bytes and the same hash. Keep the hash with the tag it was
+built from - which is why the gate refuses to build from a tree with
+uncommitted changes in it, unless `$ALLOW_DIRTY` says the ZIP is not going to be
+uploaded.
+
+What the store asks for besides the ZIP - the description, the single-purpose
+statement, a justification for each permission, the data-usage answers - is
+written out in [STORE_LISTING.md](STORE_LISTING.md), and the privacy policy the
+listing has to link to is [PRIVACY.md](PRIVACY.md). The policy needs a public
+HTTPS URL and has three things left to fill in before it can have one.

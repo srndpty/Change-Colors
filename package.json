@@ -1,0 +1,18 @@
+{
+    "name": "change-colors",
+    "version": "3.0.0",
+    "private": true,
+    "description": "Customize web page colors, fonts, images, and link styles for more comfortable reading.",
+    "type": "module",
+    "scripts": {
+        "test": "node test/record.test.mjs && node test/settings.test.mjs && node test/migration.test.mjs && node test/css.test.mjs && node test/integration.test.mjs",
+        "test:integration": "node test/integration.test.mjs",
+        "test:perf": "node test/perf.test.mjs",
+        "test:migration": "node test/migration.test.mjs",
+        "demo:prerender": "node test/prerender-demo.mjs",
+        "test:record": "node test/record.test.mjs",
+        "test:settings": "node test/settings.test.mjs",
+        "stage": "node tools/stage.mjs",
+        "release": "node tools/release.mjs"
+    }
+}
