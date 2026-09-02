@@ -177,45 +177,90 @@ function overridePatch(state, scope, want) {
     };
 }
 
+/** The scopes a change can name. Anything else is not a change we know. */
+const SCOPES = ['page', 'domain', 'all'];
+
+export function isScope(scope) {
+    return SCOPES.includes(scope);
+}
+
+function stateWithLists(settings, url) {
+    const state = getOverrideState(settings, url);
+    state.pages = {on: settings.OverridenPages, off: settings.NotOverridenPages};
+    state.domains = {on: settings.OverridenDomains, off: settings.NotOverridenDomains};
+    return state;
+}
+
 /**
- * Flips one scope for one URL: the page, the domain, or everything. One
- * function for the popup and the keyboard shortcuts both, because a shortcut
- * that means something different from the button next to it is the same bug
- * twice.
+ * Sets one scope of one URL to `active`: the page, the domain, or everything.
+ *
+ * Saying what the answer should be, rather than "change it", is what makes this
+ * safe to do twice. A message to the service worker that fails is not proof
+ * that nothing happened - the worker can save the settings and be stopped
+ * before its answer gets out - so the popup has to be able to repeat itself
+ * without undoing what went through.
+ */
+export function setOverride(scope, url, active) {
+    if (!isScope(scope)) {
+        return Promise.reject(new Error('unknown scope: ' + scope));
+    }
+    return updateSettings(function (settings) {
+        return overridePatch(stateWithLists(settings, url), scope, Boolean(active));
+    });
+}
+
+/** What one scope of one URL gets as things stand. */
+export function overrideOf(state, scope) {
+    if (scope === 'all') {
+        return state.OverrideAll;
+    }
+    return scope === 'domain' ? state.domainActive : state.active;
+}
+
+/**
+ * Turns one scope of one URL around. The keyboard shortcuts are this: there is
+ * nothing on screen for them to agree with, so what they mean is "the other
+ * one". They run in the service worker, where reading and writing are one step,
+ * so nothing can come between the reading and the writing.
+ *
+ * The popup does not use this. Its buttons say which way they are going -
+ * "remove the override on this page" - and send that, so that a message it has
+ * to repeat says the same thing the second time.
  */
 export function toggleOverride(scope, url) {
+    if (!isScope(scope)) {
+        return Promise.reject(new Error('unknown scope: ' + scope));
+    }
     return updateSettings(function (settings) {
-        const state = getOverrideState(settings, url);
-        state.pages = {on: settings.OverridenPages, off: settings.NotOverridenPages};
-        state.domains = {on: settings.OverridenDomains, off: settings.NotOverridenDomains};
-        if (scope === 'all') {
-            return overridePatch(state, 'all', !state.OverrideAll);
-        }
-        if (scope === 'domain') {
-            return overridePatch(state, 'domain', !state.domainActive);
-        }
-        return overridePatch(state, 'page', !state.active);
+        const state = stateWithLists(settings, url);
+        return overridePatch(state, scope, !overrideOf(state, scope));
     });
 }
 
 /**
  * Asks the service worker to make the change, so that changes from the popup
  * and changes from a keyboard shortcut are made one at a time on the same
- * chain. If it cannot be reached the change is made here instead: a button that
- * does nothing is worse than one that races a shortcut nobody is pressing.
+ * chain.
+ *
+ * If the worker does not answer the change is made here instead. That is only
+ * safe because what is sent is the answer and not a change: a worker stopped
+ * between saving and answering has already done exactly what this then does
+ * again, and doing it again changes nothing.
  */
-export async function requestOverrideChange(scope, url) {
+export async function requestOverrideChange(scope, url, active) {
     try {
         const answer = await chrome.runtime.sendMessage({
-            action: 'toggleOverride',
+            action: 'setOverride',
             scope: scope,
-            url: url
+            url: url,
+            active: Boolean(active)
         });
         if (answer && answer.ok) {
             return;
         }
     } catch (e) {
-        // Service worker did not answer.
+        // Service worker did not answer, which says nothing about whether it
+        // did the work.
     }
-    await toggleOverride(scope, url);
+    await setOverride(scope, url, active);
 }

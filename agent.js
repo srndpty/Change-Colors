@@ -180,13 +180,26 @@
     // nothing to let go of.
     let sweep = null;
     let sweeping = false;
+    let requested = false;
     let forgotten = 0;
+
+    /** Something left the page, so the inventory has to be looked over again. */
+    function requestSweep() {
+        requested = true;
+        sweeping = true;
+        wake();
+    }
 
     function pruneDetachedRoots() {
         for (let i = 0; i < MAX_ROOTS_PRUNED_PER_FLUSH; i++) {
             if (!sweep) {
                 sweep = styledRoots.values();
                 forgotten = 0;
+                // Everything asked for so far is what this pass is answering.
+                // What is asked for after this point is not: a tree the pass
+                // has already walked past can be taken out of the page a moment
+                // later, and only another pass will see that.
+                requested = false;
             }
             const next = sweep.next();
             if (next.done) {
@@ -194,11 +207,12 @@
                 // entries out of a Set while walking it can cut the walk short
                 // - the browser is free to rebuild the table underneath it, and
                 // Chrome does once enough has been taken out - so a pass that
-                // let go of anything is followed by another, and only a pass
-                // that let go of nothing ends the sweep. Each of them costs
-                // what one of them costs: the same few hundred per flush.
+                // let go of anything is followed by another. So is one that was
+                // overtaken by a removal. Only a whole pass that let go of
+                // nothing, with nothing asked for while it ran, ends the sweep.
+                // Each pass costs what one costs: the same few hundred a flush.
                 sweep = null;
-                sweeping = forgotten > 0;
+                sweeping = forgotten > 0 || requested;
                 return;
             }
             if (!isAttached(next.value)) {
@@ -566,8 +580,7 @@
                     // themselves are not enough to tell - the host can be
                     // anywhere under one - so what follows is a pass over the
                     // inventory, spread over flushes.
-                    sweeping = true;
-                    wake();
+                    requestSweep();
                 }
                 continue;
             }
@@ -694,6 +707,7 @@
             styledRoots.clear();
             sweep = null;
             sweeping = false;
+            requested = false;
             cleanAttributes(document);
             delete window.__changeColorsAgent;
         }

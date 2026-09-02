@@ -36,7 +36,7 @@
 			"description": "Apply or remove the override on all pages"
 		}
 	},
-	"permissions": ["storage", "scripting", "tabs", "webNavigation", "offscreen"],
+	"permissions": ["storage", "scripting", "webNavigation", "offscreen"],
 	"host_permissions": ["<all_urls>"],
 	"minimum_chrome_version": "109"
 }

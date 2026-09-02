@@ -30,7 +30,9 @@
 import {
     getSettings,
     getOverrideState,
+    isScope,
     isSupportedUrl,
+    setOverride,
     toggleOverride
 } from './common/settings.js';
 import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
@@ -546,16 +548,22 @@ chrome.commands.onCommand.addListener(async function (command) {
  * its changes here rather than making them itself, so that every one of them -
  * the popup's and the keyboard shortcuts' - is made one at a time on this
  * worker's chain.
+ *
+ * What arrives is what the setting should be, not "turn it around", so that the
+ * popup can ask again when it does not hear back - which happens for a worker
+ * stopped between saving the change and answering for it. Asking twice for the
+ * same answer gets the same answer.
  */
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
-    if (!message || message.action !== 'toggleOverride') {
+    if (!message || message.action !== 'setOverride') {
         return false;
     }
-    if (!isSupportedUrl(message.url)) {
+    if (!isScope(message.scope) || !isSupportedUrl(message.url) ||
+            typeof message.active !== 'boolean') {
         sendResponse({ok: false});
         return false;
     }
-    toggleOverride(message.scope, message.url).then(function () {
+    setOverride(message.scope, message.url, message.active).then(function () {
         sendResponse({ok: true});
     }, function () {
         sendResponse({ok: false});

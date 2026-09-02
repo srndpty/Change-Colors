@@ -14,7 +14,13 @@ import {fileURLToPath} from 'node:url';
 import {reportLaunchFailure} from './browser.mjs';
 
 const PORT = 8127;
-const EXTENSION = fileURLToPath(new URL('..', import.meta.url));
+// What gets loaded into the browser. The release gate points this at `build/`,
+// the directory that is actually packed: an import that was never added to the
+// staging list works perfectly from the source root and is simply missing from
+// what ships, and only loading what ships can tell.
+const EXTENSION = process.env.EXTENSION_DIR
+    ? path.resolve(process.env.EXTENSION_DIR)
+    : fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * Branded Google Chrome refuses `--load-extension`, so this test needs a
@@ -54,8 +60,14 @@ function findBrowser() {
 
 const CHROME = findBrowser();
 if (!CHROME) {
+    const how = 'Point $CHROME_UNBRANDED at one, or run `npx playwright install chromium`.';
+    if (process.env.REQUIRE_BROWSER) {
+        console.log('FAIL  integration test: no Chromium that accepts --load-extension was');
+        console.log('      found, and $REQUIRE_BROWSER says this one had to run. ' + how);
+        process.exit(1);
+    }
     console.log('SKIP  integration test: no Chromium that accepts --load-extension was found.');
-    console.log('      Point $CHROME_UNBRANDED at one, or run `npx playwright install chromium`.');
+    console.log('      ' + how);
     process.exit(0);
 }
 
@@ -137,6 +149,7 @@ const chrome = spawn(CHROME, [
     `http://localhost:${PORT}/`
 ], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
 reportLaunchFailure(chrome, CHROME, () => server.close());
+console.log(`      (extension loaded from ${EXTENSION})`);
 
 let nextId = 0;
 const pending = new Map();
@@ -279,6 +292,21 @@ try {
         const top = frames.find(frame => frame.frameId === 0);
         return top ? top.documentId : null;
     })()`);
+
+    // The extension asks for `<all_urls>` and nothing else that would let it
+    // read a tab's URL, because a host permission for the page is already
+    // enough - and the `tabs` permission, which the store reads as "sees every
+    // page you are on", is not. Everything the extension decides starts from a
+    // URL it read this way, so this is checked rather than believed.
+    check('the extension does not ask for the tabs permission',
+        await evaluate(workerSession,
+            'JSON.stringify(chrome.runtime.getManifest().permissions)').then(
+            text => JSON.parse(text).includes('tabs')), false);
+    check('and can still read the URL of a tab it has host access to',
+        await evaluate(workerSession, `(async () => {
+            const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+            return typeof tab.url === 'string' && tab.url.startsWith('http://localhost');
+        })()`), true);
 
     let sessionId = await openPage('http://localhost');
     const bg = expression => evaluate(sessionId, `getComputedStyle(${expression}).backgroundColor`);

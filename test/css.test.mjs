@@ -341,21 +341,40 @@ try {
     check('and every one of them is held, along with the two already there',
         `${hosts.styledRoots}/${hosts.observedRoots}`, `${HOSTS + 2}/${HOSTS + 2}`);
 
+    // A sweep answers the removals that were known when it started. One that
+    // happens while it runs - a host it has already walked past being taken out
+    // of the page - is not one of them, and is only found by another pass. The
+    // sweep started here has thousands of trees to walk and takes several
+    // flushes to do it, so what is removed a moment later is behind it.
+    const held = async (want, timeout = 20000) => {
+        const until = Date.now() + timeout;
+        for (;;) {
+            const state = JSON.parse(await agentPending(false));
+            if (state.styledRoots <= want || Date.now() > until) {
+                return state;
+            }
+            await sleep(100);
+        }
+    };
+    await evaluate(sessionId, `(() => {
+        // A removal of something that is not a host, to set a sweep going.
+        const decoy = document.createElement('div');
+        document.body.appendChild(decoy);
+        decoy.remove();
+    })()`);
+    await sleep(250);
+    await evaluate(sessionId,
+        `document.querySelector('#hosts .host').remove()`);
+    const overtaken = await held(HOSTS + 1);
+    check('a tree the sweep has already walked past is still let go of',
+        overtaken.styledRoots, HOSTS + 1);
+
     // Holding a shadow tree means holding its host and everything under it. A
     // page that rebuilds its components - which is what a long-lived single
     // page application does all day - would hand the agent the whole history of
     // itself if what it holds were only ever added to.
     await evaluate(sessionId, `document.getElementById('hosts').remove()`);
-    const dropped = await (async () => {
-        const until = Date.now() + 20000;
-        for (;;) {
-            const state = JSON.parse(await agentPending(false));
-            if (state.styledRoots <= 2 || Date.now() > until) {
-                return state;
-            }
-            await sleep(100);
-        }
-    })();
+    const dropped = await held(2);
     check('taking them out of the page makes the agent let go of them',
         `${dropped.styledRoots}/${dropped.observedRoots}`, '2/2');
     // And letting go of one is not losing it: a host put back in the page is

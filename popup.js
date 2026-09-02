@@ -15,8 +15,13 @@ let currentTab = null;
  * added the page to the exclusion list and left an older per-page inclusion
  * sitting on top of it, so the page stayed overridden and the button offered
  * the same thing again.
+ *
+ * What is sent is where the button is going, not "turn it around". The service
+ * worker can save the change and be stopped before its answer reaches us, and
+ * an unanswered message is not proof that nothing happened - so what is sent
+ * has to be a thing that can be said twice.
  */
-function setButton(id, label, scope) {
+function setButton(id, label, scope, active) {
     const button = document.getElementById(id);
     button.textContent = label;
     button.onclick = async function () {
@@ -25,7 +30,7 @@ function setButton(id, label, scope) {
         // against what is still on screen.
         setBusy(true);
         try {
-            await requestOverrideChange(scope, currentTab.url);
+            await requestOverrideChange(scope, currentTab.url, active);
             await render();
         } finally {
             setBusy(false);
@@ -43,13 +48,13 @@ async function render() {
     const state = getOverrideState(await getSettings(), currentTab.url);
     setButton('pageOverriden',
         state.active ? 'Remove override on this page' : 'Apply override on this page',
-        'page');
+        'page', !state.active);
     setButton('domainOverriden',
         state.domainActive ? 'Remove override on this domain' : 'Apply override on this domain',
-        'domain');
+        'domain', !state.domainActive);
     setButton('overrideAll',
         state.OverrideAll ? 'Remove override on all pages' : 'Apply override on all pages',
-        'all');
+        'all', !state.OverrideAll);
 }
 
 async function init() {

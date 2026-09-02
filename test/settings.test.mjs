@@ -47,6 +47,8 @@ const {
     DEFAULTS,
     getOverrideState,
     getSettings,
+    isScope,
+    setOverride,
     toggleOverride,
     updateSettings
 } = await import('../common/settings.js');
@@ -132,6 +134,30 @@ check('and turning it back on does not undo what was said about the page',
     (await state()).active, false);
 check('while the rest of the domain comes back on',
     (await state(URL_B)).active, true);
+
+/* ------------------------------------------------ saying it twice, and badly */
+
+// The popup sends where it is going, not "turn it around", so that it can send
+// it again when the service worker saves the change and is stopped before its
+// answer gets out. Sending it again must change nothing.
+reset({OverrideAll: true});
+await setOverride('page', URL_A, false);
+const afterOnce = JSON.stringify(stored);
+await setOverride('page', URL_A, false);
+check('asking for the same answer twice leaves the same answer',
+    JSON.stringify(stored), afterOnce);
+check('and it is the answer that was asked for', (await state()).active, false);
+
+await setOverride('page', URL_A, true);
+check('and asking for the other one changes it', (await state()).active, true);
+
+reset();
+check('a scope nobody knows is not a scope', isScope('everything'), false);
+const refused = await setOverride('everything', URL_A, true).then(
+    () => 'saved', () => 'refused');
+check('and a change naming one is refused rather than taken for a page',
+    refused, 'refused');
+check('leaving the settings as they were', stored.OverridenPages, []);
 
 /* --------------------------------------------- two changes at the same time */
 

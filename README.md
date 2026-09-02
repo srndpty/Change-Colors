@@ -213,6 +213,8 @@ runs on Manifest V3, with the same features and the same settings.
 | `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
 | `test/settings.test.mjs` | Checks that each override button does what its label says, and that two changes at once do not lose one |
 | `tools/stage.mjs`    | Copies the files that ship into `build/`                   |
+| `tools/release.mjs`  | The release gate: versions, tests, `build/` under test, the ZIP and its hash |
+| `tools/zip.mjs`      | Writes that ZIP, reproducibly                              |
 
 ## Development
 
@@ -254,14 +256,29 @@ Set `CHROME` to pick the browser those two use. Without it the usual install
 paths for Chrome and Chromium are tried, and if none of them is there the test
 says `SKIP` rather than failing on a path that belongs to another machine.
 
+## License and provenance
+
+This is a fork of [Strav/Change-Colors](https://github.com/Strav/Change-Colors),
+which carries no license file of its own. Permission to fork, change and publish
+it was given by the original author directly, in private correspondence rather
+than through a public license - so keep that correspondence: it is the only
+record of the permission, and it is what would be produced if the store or
+anyone else asked under what right this is published.
+
+`libs/font_detect.js` is somebody else's work under a license that does say so -
+Creative Commons Attribution-ShareAlike 2.5 - and stays under it. It keeps its
+author's notice in the file, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+says what was changed in it. That file ships with the extension.
+
 ## Packaging
 
 The folder that is worked in is not the folder that ships. It also holds the
-tests, the editor's project file and `release/change-color-2.244.crx` - the
-packed Manifest V2 version, which carries that whole extension, jQuery and
-jscolor inside it. None of that runs once installed, which is exactly why it
-should not be in the package: nobody auditing what was shipped can tell dormant
-code from live code without reading all of it.
+tests, the tools and the editor's project file, none of which runs once
+installed - which is exactly why none of it should be in the package: nobody
+auditing what was shipped can tell dormant code from live code without reading
+all of it. (The packed Manifest V2 release that used to sit in `release/` is
+gone from the tree for the same reason. It is still in the history:
+`git show d72cf2f:release/change-color-2.244.crx > change-color-2.244.crx`.)
 
 ```
 npm run stage
@@ -269,4 +286,29 @@ npm run stage
 
 copies the files the extension is actually made of into `build/`, from a list
 in `tools/stage.mjs`, and checks that everything the manifest names is among
-them. Pack `build/`.
+them. `build/` is written, never edited: work in the source, check the release
+in `build/`.
+
+What the Chrome Web Store takes is a ZIP with `manifest.json` at its root - not
+a CRX, which is for loading one by hand - and
+
+```
+npm run release
+```
+
+is everything that has to be true before uploading one, in order: the versions
+in `package.json` and `manifest.json` agree, every test passes, `build/` is
+staged, **the integration test is run again against `build/` itself**, and the
+ZIP is written to `dist/` with its SHA-256 and the commit it was built from
+printed. Upload that file from the Package tab of the developer dashboard.
+
+The step that earns its place is the second integration run. The staging list
+can be complete as far as the manifest is concerned and still miss a module
+that another module imports: loaded from the source root that extension works
+perfectly, and only the packaged one is broken. During that run - and only that
+run - `$REQUIRE_BROWSER` makes a missing browser a failure instead of a skip,
+because "the tests did not fail" has to mean "the tests ran".
+
+The archive is written with a fixed timestamp on every entry, so the same
+sources give the same bytes and the same hash. Keep the hash with the tag it
+was built from.

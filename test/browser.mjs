@@ -51,8 +51,18 @@ export function findChrome() {
     }) || null;
 }
 
-/** Says why there is nothing to run and leaves without failing. */
+/**
+ * Says why there is nothing to run and leaves without failing - unless
+ * $REQUIRE_BROWSER says a run that checked nothing is not an outcome anybody
+ * asked for. The release gate sets it: "the tests did not fail" and "the tests
+ * ran" are the same sentence only if there was a browser to run them in.
+ */
 export function skipWithoutChrome(what) {
+    if (process.env.REQUIRE_BROWSER) {
+        console.log(`FAIL  ${what}: no Chrome or Chromium was found, and`);
+        console.log('      $REQUIRE_BROWSER says this one had to run. Point $CHROME at one.');
+        process.exit(1);
+    }
     console.log(`SKIP  ${what}: no Chrome or Chromium was found.`);
     console.log('      Point $CHROME at one.');
     process.exit(0);

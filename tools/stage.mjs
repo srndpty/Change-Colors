@@ -1,13 +1,11 @@
 // Builds the directory that gets packed, rather than packing the one we work
 // in.
 //
-// The extension root holds things that are not the extension: the packed CRX of
-// the Manifest V2 version - which carries that whole extension, jQuery and
-// jscolor inside it - the tests, the editor's project file. None of it runs
-// once installed, and that is exactly what makes it worth leaving out: a
-// reviewer at the store, or anyone auditing what was shipped, cannot tell
-// dormant code from live code by reading it, and every kilobyte of it has to be
-// accounted for by hand.
+// The extension root holds things that are not the extension: the tests, the
+// tools, the editor's project file. None of it runs once installed, and that is
+// exactly what makes it worth leaving out: a reviewer at the store, or anyone
+// auditing what was shipped, cannot tell dormant code from live code by reading
+// it, and every kilobyte of it has to be accounted for by hand.
 //
 // So the list below is an allowlist. Something new in the extension has to be
 // added to it to be shipped, which fails loudly - a missing file is a broken
@@ -23,6 +21,9 @@ const OUT = path.join(ROOT, 'build');
 /** Every file the installed extension is made of, and nothing else. */
 const SHIPPED = [
     'manifest.json',
+    // Not code, but the attribution `libs/font_detect.js` is kept under has to
+    // travel with what it attributes.
+    'THIRD_PARTY_NOTICES.md',
     'background.js',
     'agent.js',
     'offscreen.html',
@@ -87,5 +88,4 @@ if (missing.length) {
 }
 
 console.log(`staged ${SHIPPED.length} files (${Math.round(bytes / 1024)} kB) in build/`);
-console.log('Pack that directory - not the extension root, which holds the tests');
-console.log('and the packed Manifest V2 release.');
+console.log('`npm run release` is what turns it into the ZIP the store takes.');
