@@ -36,13 +36,22 @@ const FRAME = `<!doctype html><html><body style="background:#ffffff;color:#111">
 <p>a sub frame of the prerendered page</p>
 </body></html>`;
 
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
     res.writeHead(200, {'Content-Type': 'text/html'});
     res.end(
         req.url.startsWith('/prerendered') ? PRERENDERED :
         req.url.startsWith('/frame') ? FRAME : SPECULATE
     );
-}).listen(PORT);
+});
+server.on('error', error => {
+    if (error.code === 'EADDRINUSE') {
+        console.log(`Port ${PORT} is already taken - another copy of this is ` +
+            `probably still running. Use it, or set PORT to something else.`);
+        process.exit(1);
+    }
+    throw error;
+});
+server.listen(PORT);
 
 console.log(`
 Serving on http://localhost:${PORT}/
@@ -97,16 +106,54 @@ Serving on http://localhost:${PORT}/
          is on in chrome://settings/performance.
 
        - an entry whose value is its own id, e.g. ["ABC…", "ABC…"]: correct. The
-         prerendered page was filed as a page of its own, and got its own
-         decision - the exclusion you set in step 2.
+         prerendered page was filed as a page of its own. Its sub frame is
+         there too, as an entry pointing at that same id.
 
        - an entry whose value is the id in \`onScreen\`: the bug. The prerendered
          page was read as a sub frame of the page you are looking at, and given
          that page's styling.
 
-  6. Click through to the prerendered page. It must still be white, sub frame
+     Entries can also be left from an earlier round of this - a page put in the
+     back/forward cache keeps its record on purpose. Those are pages of their
+     own too, so they look the same; \`await chrome.storage.session.clear()\` and
+     one more round tells them apart.
+
+     Then check which pages a decision was taken for:
+
+     Object.keys(record.decisions)
+
+     The prerendered page's id must NOT be among them: it is excluded, so what
+     was decided for it is "nothing". Its absence here is the whole point - it
+     was judged on its own url rather than handed the decision of the page on
+     screen.
+
+  6. Click through to the prerendered page. It must be white, sub frame
      included, and the popup must offer to apply the override to it rather than
      to remove it.
+
+     Whether the browser uses what it prerendered or loads the page again is its
+     own business - both are fine here, and the document id will differ between
+     the two. To see which happened, and what the extension made of the page now
+     on screen:
+
+     const tabs = await chrome.tabs.query({url: 'http://localhost:${PORT}/*'});
+     const info = [];
+     for (const t of tabs) {
+         const frames = await chrome.webNavigation.getAllFrames({tabId: t.id});
+         const top = frames.find(f => f.frameId === 0);
+         const key = 'injected:' + t.id;
+         const record = (await chrome.storage.session.get(key))[key];
+         info.push({
+             url: t.url,
+             topDocument: top && top.documentId,
+             filedUnder: record && top && record.pages[top.documentId],
+             decided: Boolean(record && top && record.decisions[top.documentId])
+         });
+     }
+     info
+
+     The prerendered page's row must have \`filedUnder\` equal to its own
+     \`topDocument\`, and \`decided\` false.
 
 Ctrl+C to stop.
 `);
