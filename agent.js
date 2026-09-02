@@ -242,6 +242,12 @@
             already.again = true;
             return;
         }
+        const whole = walking.get(document.documentElement);
+        if (whole && !whole.started && root !== document.documentElement) {
+            // A walk of the whole document is queued and has not begun; it will
+            // reach this subtree on its way through.
+            return;
+        }
         const walk = {
             root: root,
             walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT),
@@ -312,12 +318,25 @@
             pendingElements.add(element);
         }
 
+        // Taking a root on costs a tree walker and a place in the queue, so
+        // this is bounded like everything else: a page that adds a few thousand
+        // separate subtrees at once has them taken on over several flushes
+        // rather than all at once.
+        const rootsLater = [];
         pendingRoots.forEach(function (root) {
+            if (budget <= 0) {
+                rootsLater.push(root);
+                return;
+            }
             if (root.isConnected !== false) {
+                budget--;
                 queueWalk(root);
             }
         });
         pendingRoots.clear();
+        for (const root of rootsLater) {
+            pendingRoots.add(root);
+        }
 
         while (walks.length && budget > 0) {
             const walk = walks[0];
@@ -338,7 +357,7 @@
 
         measure(batch);
 
-        if (walks.length || pendingElements.size) {
+        if (walks.length || pendingElements.size || pendingRoots.size) {
             timer = setTimeout(flush, CONTINUE_DELAY);
         }
     }

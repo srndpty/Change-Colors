@@ -39,15 +39,11 @@ import {migrateLegacySettings} from './common/migration.js';
 import {
     NOTHING,
     compact,
-    decisionFor,
-    documentsOfPage,
-    indexOfSheet,
     isEmpty,
     pageOf,
-    readRecord,
-    sheetsOf,
-    shed
+    readRecord
 } from './common/record.js';
+import {syncCommittedFrame, syncPage} from './common/sync.js';
 
 const ICON_ON = 'icons/colors_icons.png';
 const ICON_OFF = 'icons/colors_icons_grey.png';
@@ -142,33 +138,56 @@ async function getRecord(tabId) {
 }
 
 /**
- * Stores what is known about a tab.
+ * Stores what is known about a tab, and says whether it did.
  *
- * There is no size at which this starts throwing away what it knows: a
- * stylesheet forgotten while it is still in a page is one nothing can ever
- * remove. Only a refusal from storage makes it give anything up, and then only
- * what `shed()` is willing to part with, one piece at a time. If even that is
- * not enough the record is left as it was - a record that could not be written
- * is recoverable, a page in a state nothing knows about is not.
+ * Nothing is ever dropped to make it fit: each part of the record is authority
+ * for something that cannot be worked out again. A refusal is reported instead,
+ * and the caller's answer to that is to leave the page alone - a record that
+ * could not be stored still describes a page nothing was done to.
  */
-async function saveRecord(tabId, record, keep) {
+async function saveRecord(tabId, record) {
     if (closedTabs.has(tabId)) {
-        return undefined;
+        return false;
     }
     compact(record);
-    if (isEmpty(record)) {
-        return chrome.storage.session.remove(injectedKey(tabId));
-    }
-    for (;;) {
-        try {
-            return await chrome.storage.session.set({[injectedKey(tabId)]: record});
-        } catch (e) {
-            if (!shed(record, keep || new Set())) {
-                return undefined;
-            }
-            compact(record);
+    try {
+        if (isEmpty(record)) {
+            await chrome.storage.session.remove(injectedKey(tabId));
+        } else {
+            await chrome.storage.session.set({[injectedKey(tabId)]: record});
         }
+    } catch (e) {
+        return false;
     }
+    if (closedTabs.has(tabId)) {
+        // The tab closed while this was being written, after onRemoved had
+        // already cleared the key. Take it back out.
+        try {
+            await chrome.storage.session.remove(injectedKey(tabId));
+        } catch (e) {
+            // Nothing else to be done about it.
+        }
+        return false;
+    }
+    return true;
+}
+
+/** What common/sync.js uses to reach one tab. */
+function ioFor(tabId) {
+    return {
+        insertCss: function (documentId, css) {
+            return insertCss(tabId, documentId, css);
+        },
+        removeCss: function (documentId, css) {
+            return removeCss(tabId, documentId, css);
+        },
+        save: function (record) {
+            return saveRecord(tabId, record);
+        },
+        applyAgent: function (documentId, decision) {
+            return applyAgent(tabId, documentId, decision);
+        }
+    };
 }
 
 /**
@@ -268,36 +287,6 @@ async function removeCss(tabId, documentId, css) {
 }
 
 /**
- * Brings one document in line with what the page should have, and records what
- * it ends up holding.
- *
- * This is the same work whether the document has just committed, has come back
- * from the back/forward cache with the stylesheet of an older setting still in
- * it, or is simply being resynced: what it should have is compared with what it
- * is known to have.
- */
-async function syncDocument(tabId, documentId, wantedCss, record) {
-    const present = sheetsOf(record, documentId);
-    const kept = [];
-    for (const css of present) {
-        if (css === wantedCss || !await removeCss(tabId, documentId, css)) {
-            kept.push(css);
-        }
-    }
-    if (wantedCss && !kept.includes(wantedCss) &&
-            await insertCss(tabId, documentId, wantedCss)) {
-        kept.push(wantedCss);
-    }
-    if (kept.length) {
-        record.documents[documentId] = kept.map(function (css) {
-            return indexOfSheet(record, css);
-        });
-    } else {
-        delete record.documents[documentId];
-    }
-}
-
-/**
  * agent.js styles shadow trees (a document stylesheet cannot reach into them)
  * and tags the elements carrying a background of their own.
  *
@@ -387,44 +376,6 @@ async function wantedFor(url) {
 }
 
 /**
- * Brings a whole page in line with what it should have: its top document, the
- * documents the browser lists for it, and the ones only this record remembers -
- * a page restored from the back/forward cache brings its sub frames back
- * without an event or a frame tree entry of any kind.
- *
- * The decision is recorded before anything is injected, because a sub frame
- * commits while the injection is still running and has to read its own page's
- * answer rather than the last page's.
- */
-async function syncPage(tabId, pageId, decision, record, alsoLive) {
-    const ids = [pageId];
-    for (const id of (alsoLive || []).concat(documentsOfPage(record, pageId))) {
-        if (!ids.includes(id)) {
-            ids.push(id);
-        }
-    }
-
-    if (decision.css) {
-        record.decisions[pageId] = decision;
-    } else {
-        delete record.decisions[pageId];
-    }
-    for (const id of ids) {
-        record.pages[id] = pageId;
-    }
-    await saveRecord(tabId, record, new Set(ids));
-
-    for (const id of ids) {
-        await syncDocument(tabId, id, decision.css, record);
-    }
-    await saveRecord(tabId, record, new Set(ids));
-
-    for (const id of ids) {
-        await applyAgent(tabId, id, decision);
-    }
-}
-
-/**
  * Brings a tab in line with the current settings. Runs on the tab's queue, so
  * it has the tab to itself for the whole of its read-modify-write.
  *
@@ -442,7 +393,7 @@ async function syncTab(tabId, url, fresh) {
             record.top = fresh.documentId;
             await setIcon(tabId, Boolean(decision.css));
         }
-        await syncPage(tabId, fresh.documentId, decision, record);
+        await syncPage(ioFor(tabId), fresh.documentId, decision, record);
         return;
     }
 
@@ -472,7 +423,7 @@ async function syncTab(tabId, url, fresh) {
     record.top = pageId;
     const decision = await wantedFor(currentUrl);
     await setIcon(tabId, Boolean(decision.css));
-    await syncPage(tabId, pageId, decision, record,
+    await syncPage(ioFor(tabId), pageId, decision, record,
         top ? documentsUnder(frames, top) : []);
 }
 
@@ -530,11 +481,7 @@ chrome.webNavigation.onCommitted.addListener(function (details) {
         if (!pageId) {
             return;
         }
-        const decision = decisionFor(record, pageId);
-        record.pages[details.documentId] = pageId;
-        await syncDocument(details.tabId, details.documentId, decision.css, record);
-        await saveRecord(details.tabId, record, new Set([pageId, details.documentId]));
-        await applyAgent(details.tabId, details.documentId, decision);
+        await syncCommittedFrame(ioFor(details.tabId), details.documentId, pageId, record);
     });
 });
 

@@ -4,9 +4,12 @@
 // from every <video> once made Chrome spend two hundred times longer
 // recalculating styles on a page with a live chat, which is what made sites
 // like Twitch feel sluggish. This measures the browser's own style
-// recalculation time with and without the extension, on a page shaped like one:
-// a chat appending and dropping nodes, a container flipping classes the way a
-// player shows its controls, and an inline style changing every frame.
+// recalculation time, and the extension's own script time, with and without it,
+// on a page shaped like one: a chat appending and dropping nodes, a container
+// flipping classes the way a player shows its controls, an inline style
+// changing every frame, and - the shape that gets handed to the page agent in
+// the largest pieces - hundreds of separate subtrees appearing at once and
+// hundreds of separate elements being restyled at once.
 import {spawn} from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -69,6 +72,26 @@ body { background:#fff; color:#111; font: 13px sans-serif; margin:0 }
     while (chat.children.length > 120) chat.removeChild(chat.firstChild);
   }, 50);
   setInterval(() => { player.classList.toggle('hovered'); app.classList.toggle('active'); }, 100);
+  // Hundreds of separate subtrees at once: each one is a root of its own for
+  // anything watching the document.
+  const burstHost = document.createElement('div');
+  document.body.appendChild(burstHost);
+  // More at once than one flush of the agent will take on, so the deferring is
+  // exercised rather than just present.
+  setInterval(() => {
+    burstHost.textContent = '';
+    const batch = document.createDocumentFragment();
+    for (let i = 0; i < 8000; i++) {
+      const item = document.createElement('div');
+      item.className = 'card';
+      item.innerHTML = '<span>burst ' + i + '</span>';
+      batch.appendChild(item);
+    }
+    burstHost.appendChild(batch);
+  }, 1500);
+  // And hundreds of separate elements restyled at once.
+  const cards = Array.from(document.querySelectorAll('#grid .card'));
+  setInterval(() => { cards.forEach(c => c.classList.toggle('lit')); }, 250);
   let w = 0;
   const tick = () => { volume.style.width = (30 + (w++ % 60)) + 'px'; requestAnimationFrame(tick); };
   tick();

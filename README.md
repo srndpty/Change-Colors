@@ -38,13 +38,24 @@ runs on Manifest V3, with the same features and the same settings.
   `documentId`, so work decided for one document can only ever reach that
   document. A resync works from the tab's live frames rather than from the URL it
   was queued with, which can already be a page old.
-- Nothing that says a document holds a stylesheet is dropped on a guess. A
-  document the browser no longer lists is not necessarily gone - that is why the
-  record of which page each one belongs to exists at all - so there is no count
-  at which its entry stops being worth keeping: a page with sixty sub frames put
-  in the back/forward cache would otherwise come back with stylesheets nothing
-  could remove. What a tab knows goes when the tab goes, and only a refusal from
-  storage makes it give anything up, starting with what can least be missed.
+- Nothing a tab knows is dropped on a guess. A document the browser no longer
+  lists is not necessarily gone, a page on screen can add an iframe at any
+  moment, and each part of the record is authority for something that cannot be
+  worked out again - which document holds a stylesheet and its exact text, which
+  page a document belongs to, what its page decided. There is no count at which
+  any of that stops being worth keeping: a page with sixty sub frames put in the
+  back/forward cache would otherwise come back holding stylesheets nothing could
+  remove. What a tab knows goes when the tab goes, and what keeps that
+  affordable is that the stylesheets themselves are held once each, so a page
+  costs a few dozen bytes of document ids.
+- Nothing is put into a page until the record that says so has been stored, and
+  what is stored first is the wider claim: every document is written down as
+  holding both what it has and what it is about to be given. A record that could
+  not be stored leaves the page untouched, which is a state that record still
+  describes; a record stored before the work covers more than the page holds if
+  the work half happens, and claiming a stylesheet that is not there only makes
+  a later removal a no-op. The exact result is stored afterwards, and that write
+  is the only one allowed to make the record say less.
 - The service worker keeps what a page *should* have separate from what each
   document is known to *have*. A stylesheet is recorded only by an `insertCSS`
   that succeeded and taken off only by a `removeCSS` that succeeded, and each
@@ -157,11 +168,12 @@ runs on Manifest V3, with the same features and the same settings.
 | `options.html/.js`   | Preferences                                                |
 | `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
 | `common/migration.js`| Carries version 2.x settings over, retried until it works   |
-| `common/record.js`   | What a tab knows, and the rules for forgetting any of it   |
+| `common/record.js`   | What a tab knows                                           |
+| `common/sync.js`     | Bringing documents in line, in an order that cannot strand a stylesheet |
 | `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
 | `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
-| `test/record.test.mjs` | What a tab is allowed to forget                           |
+| `test/record.test.mjs` | What a tab knows, and what it does when it cannot write it down |
 | `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
 | `test/prerender-demo.mjs` | Serves the pages for checking prerendering by hand |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |

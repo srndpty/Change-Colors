@@ -191,6 +191,24 @@ async function attach(target) {
     return sessionId;
 }
 
+/**
+ * Waits for something to reach a value, up to a deadline, and returns whatever
+ * it last saw. What is being asserted is where the extension settles: the work
+ * is queued behind everything else the tab is doing, so a fixed wait either
+ * makes the test slow or makes it flake.
+ */
+async function settles(read, expected, timeout = 8000) {
+    const until = Date.now() + timeout;
+    let seen;
+    for (;;) {
+        seen = await read();
+        if (JSON.stringify(seen) === JSON.stringify(expected) || Date.now() > until) {
+            return seen;
+        }
+        await sleep(250);
+    }
+}
+
 const results = [];
 function check(name, actual, expected) {
     const ok = Array.isArray(expected)
@@ -324,10 +342,11 @@ try {
     await sleep(1000);
     await evaluate(sessionId, 'location.href = "/redirect"');
     await settings({background_color: '445566'});
-    await sleep(4000);
+    await sleep(2000);
     sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
     check('a document that replaced another is left alone if it is excluded',
-        await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
+        await settles(() => evaluate(sessionId,
+            'getComputedStyle(document.body).backgroundColor'), WHITE), WHITE);
     check('and its elements too',
         await evaluate(sessionId, 'getComputedStyle(document.getElementById("p")).backgroundColor'), CLEAR);
 

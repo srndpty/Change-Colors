@@ -1,5 +1,5 @@
 /**
- * What is known about a tab, and the rules for forgetting any of it.
+ * What is known about a tab.
  *
  * A tab is not one page. It holds the page it is showing, whatever the
  * back/forward cache is keeping for it, and any page it is prerendering, all at
@@ -11,41 +11,38 @@
  *              measure. Written as soon as the page's top document commits,
  *              before anything is injected, because a sub frame commits while
  *              the injection is still running and has to read its own page's
- *              answer. It is the one decision for that page: a sub frame
- *              applies it rather than deciding again from settings that may
- *              have moved on since.
+ *              answer. A page keeps its decision for as long as it can still
+ *              commit a document, which is for as long as it exists: a page on
+ *              screen adds an iframe whenever it likes.
  *   pages      documentId -> the page it belongs to. This is how a document is
- *              reached at all: a page restored from the back/forward cache
+ *              reached at all - a page restored from the back/forward cache
  *              brings its sub frames back already loaded, they commit nothing,
- *              and `webNavigation.getAllFrames` does not list them - not even
- *              seconds later.
+ *              and `webNavigation.getAllFrames` does not list them - and it is
+ *              also how a sub frame that commits later is told which page it
+ *              belongs to, through its parent.
  *   documents  documentId -> the stylesheets believed to be in that document,
  *              as indices into `sheets`. A stylesheet is added only by an
  *              insertCSS that succeeded and taken away only by a removeCSS that
  *              succeeded. Each call names one document, so there is no partial
- *              success to misread: what the list says is what that document
- *              holds.
- *   sheets     the text of those stylesheets, held once however many documents
- *              have them. The text is the only thing that can remove a
- *              stylesheet, and it is a few kilobytes, so documents refer to it
- *              rather than repeat it.
+ *              success to misread.
+ *   sheets     the text of every stylesheet mentioned above, held once however
+ *              many documents and decisions refer to it. The text is the only
+ *              thing that can remove a stylesheet, it is a few kilobytes, and
+ *              a tab's pages mostly want the same one.
  *   top        the page the tab is actually showing. Only a fallback, for
  *              working out which page a sub frame belongs to when the browser
  *              does not say.
  *
- * Nothing that says a document holds a stylesheet is ever dropped on a guess.
- * A document the browser no longer lists is not necessarily gone - that is the
- * whole reason `pages` exists - so there is no count at which its entry stops
- * being worth keeping: dropping it while the stylesheet is still in the page
- * leaves a stylesheet nothing can ever remove, because removeCSS needs exactly
- * the text this record holds. What a tab knows goes when the tab goes.
+ * Nothing here is ever dropped to save room. Each of these is authority for
+ * something that cannot be worked out again: which document holds a stylesheet
+ * and its exact text, which page a document belongs to, and what its page
+ * decided. A document the browser no longer lists is not necessarily gone, a
+ * page on screen can commit a new sub frame at any moment, and a guess in
+ * either direction strands a stylesheet in a page or hands a document the
+ * decision of the wrong page. What a tab knows goes when the tab goes.
  *
- * Two things are allowed to be forgotten. A decision, because it carries whole
- * stylesheets and only matters while a page can still commit a document - a
- * page that is no longer being loaded gets a fresh decision if it ever comes
- * back. And a `pages` entry for a document with nothing in it, which costs only
- * the chance to restyle that document later. Even those are only given up when
- * the browser will not store the record as it is.
+ * What keeps that affordable is that the big values - the stylesheets - are
+ * held once each, so what a page costs is a few dozen bytes of document ids.
  */
 
 /** What a page gets when nothing is meant to be applied to it. */
@@ -67,13 +64,45 @@ export function isEmpty(record) {
         !Object.keys(record.documents).length;
 }
 
+function textAt(record, index) {
+    return index === null || index === undefined ? null : record.sheets[index];
+}
+
+export function indexOfSheet(record, css) {
+    if (css === null || css === undefined) {
+        return null;
+    }
+    const index = record.sheets.indexOf(css);
+    return index === -1 ? record.sheets.push(css) - 1 : index;
+}
+
 /**
  * What a page decided. A page nothing was decided for and a page decided to be
  * left alone are the same thing to a document: take the stylesheet out and stop
  * the agent.
  */
 export function decisionFor(record, pageId) {
-    return record.decisions[pageId] || NOTHING;
+    const stored = record.decisions[pageId];
+    if (!stored) {
+        return NOTHING;
+    }
+    return {
+        css: textAt(record, stored.css),
+        shadowCss: textAt(record, stored.shadow),
+        probe: Boolean(stored.probe)
+    };
+}
+
+export function setDecision(record, pageId, decision) {
+    if (!decision || !decision.css) {
+        delete record.decisions[pageId];
+        return;
+    }
+    record.decisions[pageId] = {
+        css: indexOfSheet(record, decision.css),
+        shadow: indexOfSheet(record, decision.shadowCss),
+        probe: Boolean(decision.probe)
+    };
 }
 
 /** The page a document belongs to, as far as anything here knows. */
@@ -100,46 +129,36 @@ export function sheetsOf(record, documentId) {
     });
 }
 
-export function indexOfSheet(record, css) {
-    const index = record.sheets.indexOf(css);
-    return index === -1 ? record.sheets.push(css) - 1 : index;
+export function setSheets(record, documentId, texts) {
+    if (!texts.length) {
+        delete record.documents[documentId];
+        return;
+    }
+    record.documents[documentId] = texts.map(function (css) {
+        return indexOfSheet(record, css);
+    });
 }
 
-/** Drops the text of stylesheets no document refers to any more. */
+/** Drops the text of stylesheets nothing refers to any more. */
 export function compact(record) {
     const sheets = [];
     const moved = new Map();
+    function keep(index) {
+        if (index === null || index === undefined) {
+            return index;
+        }
+        if (!moved.has(index)) {
+            moved.set(index, sheets.push(record.sheets[index]) - 1);
+        }
+        return moved.get(index);
+    }
     for (const id of Object.keys(record.documents)) {
-        record.documents[id] = record.documents[id].map(function (index) {
-            if (!moved.has(index)) {
-                moved.set(index, sheets.push(record.sheets[index]) - 1);
-            }
-            return moved.get(index);
-        });
+        record.documents[id] = record.documents[id].map(keep);
+    }
+    for (const id of Object.keys(record.decisions)) {
+        const decision = record.decisions[id];
+        decision.css = keep(decision.css);
+        decision.shadow = keep(decision.shadow);
     }
     record.sheets = sheets;
-}
-
-/**
- * Gives up as little as possible, in the order it can least be missed, until
- * the caller says the record fits. Called only when storing it failed.
- *
- * Returns false when there is nothing left it is willing to give up: everything
- * remaining is a document believed to hold a stylesheet, and forgetting one of
- * those would strand it.
- */
-export function shed(record, keep) {
-    for (const id of Object.keys(record.decisions)) {
-        if (!keep.has(id)) {
-            delete record.decisions[id];
-            return true;
-        }
-    }
-    for (const id of Object.keys(record.pages)) {
-        if (!keep.has(id) && !record.documents[id]) {
-            delete record.pages[id];
-            return true;
-        }
-    }
-    return false;
 }
