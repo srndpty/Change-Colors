@@ -16,10 +16,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {findChrome, reportLaunchFailure, skipWithoutChrome} from './browser.mjs';
 import {DEFAULTS} from '../common/settings.js';
 import {buildCss, buildShadowCss} from '../common/css.js';
 
-const CHROME = process.env.CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = findChrome();
+if (!CHROME) {
+    skipWithoutChrome('performance test');
+}
 const PORT = 8126;
 const WINDOW = 6000;
 // The regression this guards against was measured in seconds, not milliseconds.
@@ -109,6 +113,7 @@ const chrome = spawn(CHROME, [
     '--window-size=1280,900', '--hide-scrollbars',
     '--no-first-run', '--no-default-browser-check', `http://localhost:${PORT}/`
 ], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
+reportLaunchFailure(chrome, CHROME, () => server.close());
 
 let nextId = 0;
 const pending = new Map();

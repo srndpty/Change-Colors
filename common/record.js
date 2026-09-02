@@ -116,13 +116,27 @@ export function setDecision(record, pageId, decision) {
     };
 }
 
-/** The page a document belongs to, as far as anything here knows. */
+/**
+ * The page a document belongs to, as far as anything here knows, or null when
+ * nothing here knows.
+ *
+ * `top` is the last resort and only that. It is the page the tab is showing,
+ * which is the right answer for a sub frame the browser tells us nothing about
+ * - but it is only ever as fresh as the last write that got through, and a
+ * write that failed for want of room leaves it naming the page before this one.
+ * So when the browser does name the parent, that name is the whole answer: if
+ * the parent is not recorded, this document's page is not known, and guessing
+ * hands the frame the decision of a page that is no longer on screen - the top
+ * document bare and one iframe still colored, written back as fact. Not
+ * knowing is recoverable; the next full resync reaches the frame through its
+ * page.
+ */
 export function pageOf(record, documentId, parentDocumentId) {
     if (record.pages[documentId]) {
         return record.pages[documentId];
     }
-    if (parentDocumentId && record.pages[parentDocumentId]) {
-        return record.pages[parentDocumentId];
+    if (parentDocumentId) {
+        return record.pages[parentDocumentId] || null;
     }
     return record.top;
 }

@@ -1,59 +1,55 @@
-import {getSettings, getOverrideState, isSupportedUrl, toggleFlag, toggleListEntry} from './common/settings.js';
+import {
+    getSettings,
+    getOverrideState,
+    isSupportedUrl,
+    requestOverrideChange
+} from './common/settings.js';
 
 let currentTab = null;
 
-function setButton(id, label, onClick) {
+/**
+ * Every button says what pressing it will do, and pressing it does exactly
+ * that. A label is worked out from what the page (or the domain) actually gets
+ * in the end, not from one list it happens to be on, because the two used to
+ * disagree: with the global override on, "no global override on this page"
+ * added the page to the exclusion list and left an older per-page inclusion
+ * sitting on top of it, so the page stayed overridden and the button offered
+ * the same thing again.
+ */
+function setButton(id, label, scope) {
     const button = document.getElementById(id);
     button.textContent = label;
     button.onclick = async function () {
-        await onClick();
-        await render();
+        // A change is read, altered and written back. The service worker does
+        // them one at a time; this keeps a second press from being queued
+        // against what is still on screen.
+        setBusy(true);
+        try {
+            await requestOverrideChange(scope, currentTab.url);
+            await render();
+        } finally {
+            setBusy(false);
+        }
     };
 }
 
-async function render() {
-    const settings = await getSettings();
-    const state = getOverrideState(settings, currentTab.url);
+function setBusy(busy) {
+    document.querySelectorAll('#buttons button').forEach(function (button) {
+        button.disabled = busy;
+    });
+}
 
-    if (state.OverrideAll) {
-        // While the global override is on, the page and domain buttons manage
-        // the exclusion lists instead.
-        if (state.NotOverridenPages) {
-            setButton('pageOverriden', 'Global override on this page', function () {
-                return toggleListEntry('NotOverridenPages', state.url);
-            });
-        } else {
-            setButton('pageOverriden', 'No global override on this page', function () {
-                return toggleListEntry('NotOverridenPages', state.url);
-            });
-        }
-        if (state.NotOverridenDomains) {
-            setButton('domainOverriden', 'Global override on this domain', function () {
-                return toggleListEntry('NotOverridenDomains', state.domain);
-            });
-        } else {
-            setButton('domainOverriden', 'No global override on this domain', function () {
-                return toggleListEntry('NotOverridenDomains', state.domain);
-            });
-        }
-        setButton('overrideAll', 'Remove override on all pages', function () {
-            return toggleFlag('OverrideAll');
-        });
-    } else {
-        setButton('pageOverriden',
-            state.OverridenPages ? 'Remove override on this page' : 'Apply override on this page',
-            function () {
-                return toggleListEntry('OverridenPages', state.url);
-            });
-        setButton('domainOverriden',
-            state.OverridenDomains ? 'Remove override on this domain' : 'Apply override on this domain',
-            function () {
-                return toggleListEntry('OverridenDomains', state.domain);
-            });
-        setButton('overrideAll', 'Apply override on all pages', function () {
-            return toggleFlag('OverrideAll');
-        });
-    }
+async function render() {
+    const state = getOverrideState(await getSettings(), currentTab.url);
+    setButton('pageOverriden',
+        state.active ? 'Remove override on this page' : 'Apply override on this page',
+        'page');
+    setButton('domainOverriden',
+        state.domainActive ? 'Remove override on this domain' : 'Apply override on this domain',
+        'domain');
+    setButton('overrideAll',
+        state.OverrideAll ? 'Remove override on all pages' : 'Apply override on all pages',
+        'all');
 }
 
 async function init() {

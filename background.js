@@ -31,8 +31,7 @@ import {
     getSettings,
     getOverrideState,
     isSupportedUrl,
-    toggleFlag,
-    toggleListEntry
+    toggleOverride
 } from './common/settings.js';
 import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
 import {migrateLegacySettings} from './common/migration.js';
@@ -523,22 +522,45 @@ chrome.storage.onChanged.addListener(function (changes, areaName) {
     }
 });
 
+const COMMAND_SCOPES = {
+    'override-page': 'page',
+    'override-domain': 'domain',
+    'override-all': 'all'
+};
+
+// The same change the popup's button makes, through the same function: a
+// shortcut that turns an override on where the button next to it turns one off
+// is the same bug twice.
 chrome.commands.onCommand.addListener(async function (command) {
+    const scope = COMMAND_SCOPES[command];
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
-    if (!tab || !isSupportedUrl(tab.url)) {
+    if (!scope || !tab || !isSupportedUrl(tab.url)) {
         return;
     }
-    switch (command) {
-    case 'override-page':
-        await toggleListEntry('OverridenPages', tab.url);
-        break;
-    case 'override-domain':
-        await toggleListEntry('OverridenDomains', new URL(tab.url).hostname);
-        break;
-    case 'override-all':
-        await toggleFlag('OverrideAll');
-        break;
+    await toggleOverride(scope, tab.url);
+});
+
+/**
+ * Changing an override is a read of the settings, a change, and a write back,
+ * and two of those overlapping lose one of the two changes. The popup asks for
+ * its changes here rather than making them itself, so that every one of them -
+ * the popup's and the keyboard shortcuts' - is made one at a time on this
+ * worker's chain.
+ */
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (!message || message.action !== 'toggleOverride') {
+        return false;
     }
+    if (!isSupportedUrl(message.url)) {
+        sendResponse({ok: false});
+        return false;
+    }
+    toggleOverride(message.scope, message.url).then(function () {
+        sendResponse({ok: true});
+    }, function () {
+        sendResponse({ok: false});
+    });
+    return true;
 });
 
 chrome.runtime.onInstalled.addListener(async function () {

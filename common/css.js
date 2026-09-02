@@ -37,13 +37,20 @@ const SHADOW_SCOPE = {root: ':host', prefix: '', host: ':host'};
  *
  * Sites use `!important` themselves, and on an id or class selector their
  * declaration beats ours - that is how a component keeps its black text on our
- * dark background. `:not(#id)` matches everything while counting as an id, so
- * it lifts our rules above anything a page is likely to declare without
- * changing what they match. Rules that have to win against our own base rule
- * get one level more.
+ * dark background. A `:not()` counts for the specificity of what is inside it
+ * while matching everything the argument does not, so it lifts our rules above
+ * anything a page is likely to declare. Rules that have to win against our own
+ * base rule get one level more.
+ *
+ * The ids go in one compound - `#a#b#c`, not `:not(#a):not(#b):not(#c)` - so
+ * that the argument cannot match anything at all: an element has one id, so no
+ * element is all three, and `:not()` is therefore true of every element. Three
+ * separate `:not()`s count the same but each one is a real exclusion, and a
+ * site that happens to use one of these ids would have had that element left
+ * out of the override.
  */
-const BOOST = ':not(#changecolors-a):not(#changecolors-b):not(#changecolors-c)';
-const BOOST_OVER_BASE = BOOST + ':not(#changecolors-d)';
+const BOOST = ':not(#changecolors-a#changecolors-b#changecolors-c)';
+const BOOST_OVER_BASE = ':not(#changecolors-a#changecolors-b#changecolors-c#changecolors-d)';
 
 /**
  * Quotes a font family name for CSS. Settings saved by older versions already

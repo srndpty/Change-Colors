@@ -37,6 +37,10 @@
     // the work of a flush is not the same as bounding what is waiting.
     const MAX_QUEUED_WALKS = 4000;
     const MAX_ROOTS_PER_FLUSH = 1000;
+    // How many of the shadow trees already styled a flush looks over for ones
+    // that have been taken out of the page. Bounded like everything else: a
+    // flush must not cost the length of the inventory.
+    const MAX_ROOTS_PRUNED_PER_FLUSH = 200;
     const CONTINUE_DELAY = 16;
 
     const OBSERVED = {
@@ -61,11 +65,19 @@
     // Whether the stylesheet paints backgrounds, and elements therefore have to
     // be measured.
     let measuring = true;
-    // Every shadow root the stylesheet was put into, for the whole life of the
-    // agent: stop() has to be able to take it out of all of them, including the
-    // ones found before the last setCss().
+    // Every shadow root the stylesheet is in, and the observer watching each of
+    // them: stop() has to be able to take the stylesheet out of all of them,
+    // including the ones found before the last setCss(), and both of these
+    // hold the tree they name alive.
+    //
+    // Which is why a root taken out of the page is let go of here as well - see
+    // forget(). A component rebuilt on every render, which is what a long-lived
+    // single page application does all day, would otherwise leave the agent
+    // holding every host it ever styled and the whole subtree under each. The
+    // observer is per root rather than one for all of them for that reason
+    // alone: one observer cannot be told to stop watching a single target.
     const styledRoots = new Set();
-    const observedRoots = new Set();
+    const observedRoots = new Map();
     // Timers of the delayed rescans, so stop() can cancel them.
     const delayed = [];
 
@@ -107,10 +119,92 @@
             return;
         }
         try {
-            observer.observe(root, OBSERVED);
-            observedRoots.add(root);
+            const rootObserver = new MutationObserver(onMutations);
+            rootObserver.observe(root, OBSERVED);
+            observedRoots.set(root, rootObserver);
         } catch (e) {
             // Root is gone.
+        }
+    }
+
+    /** Whether a shadow tree is still part of the page. */
+    function isAttached(root) {
+        const host = root && root.host;
+        return Boolean(host && host.isConnected);
+    }
+
+    /**
+     * Takes the stylesheet out of a shadow tree and lets go of it: its
+     * observer, its place in the inventory, and through those the tree itself.
+     *
+     * A tree that comes back is not lost by this. It comes back through its
+     * host, which the document's observer sees being added, and adopt() puts
+     * everything back - including the measuring, which is the only thing that
+     * can be stale by then.
+     */
+    /** Takes everything this agent put into a shadow tree back out of it. */
+    function unstyle(root) {
+        try {
+            root.adoptedStyleSheets = root.adoptedStyleSheets.filter(function (adopted) {
+                return adopted !== sheet;
+            });
+        } catch (e) {
+            // Root is gone.
+        }
+        const style = root.querySelector && root.querySelector('style[data-changecolors]');
+        if (style) {
+            style.remove();
+        }
+        // Tags set inside a shadow tree are out of the document's reach.
+        cleanAttributes(root);
+    }
+
+    function forget(root) {
+        const rootObserver = observedRoots.get(root);
+        if (rootObserver) {
+            rootObserver.disconnect();
+            observedRoots.delete(root);
+        }
+        unstyle(root);
+        styledRoots.delete(root);
+    }
+
+    // Where the sweep for detached trees got to, and whether one is wanted. A
+    // Set iterator sees what is added while it is alive, and deleting through
+    // it is safe, so it is kept between flushes rather than the inventory being
+    // copied out each time.
+    //
+    // A sweep is asked for by something being taken out of the page, and lasts
+    // one pass over the inventory. Sweeping only then is what keeps this from
+    // being a cost the agent pays for ever: a page that removes nothing has
+    // nothing to let go of.
+    let sweep = null;
+    let sweeping = false;
+    let forgotten = 0;
+
+    function pruneDetachedRoots() {
+        for (let i = 0; i < MAX_ROOTS_PRUNED_PER_FLUSH; i++) {
+            if (!sweep) {
+                sweep = styledRoots.values();
+                forgotten = 0;
+            }
+            const next = sweep.next();
+            if (next.done) {
+                // The end of a walk is not the end of the inventory. Taking
+                // entries out of a Set while walking it can cut the walk short
+                // - the browser is free to rebuild the table underneath it, and
+                // Chrome does once enough has been taken out - so a pass that
+                // let go of anything is followed by another, and only a pass
+                // that let go of nothing ends the sweep. Each of them costs
+                // what one of them costs: the same few hundred per flush.
+                sweep = null;
+                sweeping = forgotten > 0;
+                return;
+            }
+            if (!isAttached(next.value)) {
+                forget(next.value);
+                forgotten++;
+            }
         }
     }
 
@@ -403,8 +497,11 @@
         }
 
         measure(batch);
+        if (sweeping) {
+            pruneDetachedRoots();
+        }
 
-        if (walks.length || pendingElements.size || pendingRoots.size) {
+        if (walks.length || pendingElements.size || pendingRoots.size || sweeping) {
             timer = setTimeout(flush, CONTINUE_DELAY);
         }
     }
@@ -455,7 +552,7 @@
         }).filter(Boolean).sort().join(';');
     }
 
-    const observer = new MutationObserver(function (records) {
+    function onMutations(records) {
         for (const record of records) {
             if (record.type === 'childList') {
                 record.addedNodes.forEach(function (node) {
@@ -463,6 +560,15 @@
                         scheduleSubtree(node);
                     }
                 });
+                if (record.removedNodes.length) {
+                    // Something left the page, so a shadow tree this agent is
+                    // holding may have gone with it. The removed nodes
+                    // themselves are not enough to tell - the host can be
+                    // anywhere under one - so what follows is a pass over the
+                    // inventory, spread over flushes.
+                    sweeping = true;
+                    wake();
+                }
                 continue;
             }
             if (!measuring || record.target.nodeType !== Node.ELEMENT_NODE) {
@@ -493,7 +599,10 @@
             // subtree costs time rather than responsiveness.
             scheduleSubtree(record.target);
         }
-    });
+    }
+
+    // The document's own observer. Shadow trees get one each, in observeRoot().
+    const observer = new MutationObserver(onMutations);
 
     function start() {
         if (stopped) {
@@ -540,6 +649,12 @@
                 roots: pendingRoots.size,
                 elements: pendingElements.size,
                 walks: walks.length,
+                // What the agent is holding on to rather than what is waiting:
+                // a shadow tree taken out of the page is held by both of these
+                // until a flush notices and lets go of it.
+                styledRoots: styledRoots.size,
+                observedRoots: observedRoots.size,
+                sweeping: sweeping,
                 maxWalks: stats.maxWalks,
                 maxRootsFromPending: stats.maxRootsFromPending,
                 maxRootsSeen: stats.maxRootsSeen,
@@ -567,30 +682,18 @@
             walking.clear();
             pendingRoots.clear();
             pendingElements.clear();
+            observedRoots.forEach(function (rootObserver) {
+                rootObserver.disconnect();
+            });
             observedRoots.clear();
             if (timer !== null) {
                 clearTimeout(timer);
                 timer = null;
             }
-            walks.length = 0;
-            pendingRoots.clear();
-            pendingElements.clear();
-            styledRoots.forEach(function (root) {
-                try {
-                    root.adoptedStyleSheets = root.adoptedStyleSheets.filter(function (adopted) {
-                        return adopted !== sheet;
-                    });
-                } catch (e) {
-                    // Root is gone.
-                }
-                const style = root.querySelector && root.querySelector('style[data-changecolors]');
-                if (style) {
-                    style.remove();
-                }
-                // Tags set inside a shadow tree are out of the document's reach.
-                cleanAttributes(root);
-            });
+            styledRoots.forEach(unstyle);
             styledRoots.clear();
+            sweep = null;
+            sweeping = false;
             cleanAttributes(document);
             delete window.__changeColorsAgent;
         }

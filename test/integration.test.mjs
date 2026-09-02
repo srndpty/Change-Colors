@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {reportLaunchFailure} from './browser.mjs';
 
 const PORT = 8127;
 const EXTENSION = fileURLToPath(new URL('..', import.meta.url));
@@ -135,6 +136,7 @@ const chrome = spawn(CHROME, [
     '--no-default-browser-check',
     `http://localhost:${PORT}/`
 ], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
+reportLaunchFailure(chrome, CHROME, () => server.close());
 
 let nextId = 0;
 const pending = new Map();

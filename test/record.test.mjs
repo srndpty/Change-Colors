@@ -400,6 +400,17 @@ check('a document is filed under the page of the frame that made it',
     pageOf(readRecord({pages: {parent: 'thePage'}}), 'new', 'parent'), 'thePage');
 check('and falls back to the page the tab is showing',
     pageOf(readRecord({top: 'thePage'}), 'new', undefined), 'thePage');
+// The tab's page is only ever as fresh as the last write that got through: a
+// top document whose write-ahead save failed for want of room leaves `top`
+// naming the page before it. A named parent that is not recorded is therefore
+// not an invitation to fall back on it - the frame is left alone until a full
+// resync reaches it through its page.
+check('but a named parent that is not recorded leaves the page unknown',
+    pageOf(readRecord({top: 'stale-page', pages: {}}), 'new', 'uncharted-parent'),
+    null);
+check('and the fallback is still there for a frame with no parent named',
+    pageOf(readRecord({top: 'stale-page', pages: {}}), 'new', undefined),
+    'stale-page');
 check('an empty record is recognised as empty', isEmpty(readRecord(null)), true);
 check('and one holding a stylesheet is not', isEmpty(sheets), false);
 

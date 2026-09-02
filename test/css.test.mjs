@@ -8,10 +8,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {findChrome, reportLaunchFailure, skipWithoutChrome} from './browser.mjs';
 import {DEFAULTS} from '../common/settings.js';
 import {buildCss, buildShadowCss} from '../common/css.js';
 
-const CHROME = process.env.CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = findChrome();
+if (!CHROME) {
+    skipWithoutChrome('css test');
+}
 const PORT = 8124;
 
 const PAGE = `<!doctype html><html><head><style>
@@ -31,6 +35,9 @@ const PAGE = `<!doctype html><html><head><style>
 </div></div>
 
 <div id="menu" style="background:#ffffff">dropdown</div>
+<!-- A site that happens to use one of the ids the specificity padding names.
+     The padding must count for specificity without leaving anything out. -->
+<div id="changecolors-a" style="background:#ffffff">a site's own element</div>
 <div id="stubborn">styled with !important by the site</div>
 
 <div id="hero" style="position:relative;width:400px;height:200px;background-image:url(/hero.gif);background-size:cover">
@@ -94,6 +101,7 @@ const chrome = spawn(CHROME, [
     '--no-default-browser-check',
     `http://localhost:${PORT}/`
 ], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
+reportLaunchFailure(chrome, CHROME, () => server.close());
 
 let nextId = 0;
 const pending = new Map();
@@ -190,6 +198,9 @@ try {
     check('the label under it keeps its color', await color('entryLabel'), TEXT);
     check('headline over a banner is cleared', await bg('heroText'), CLEAR);
     check('element with a solid background keeps the chosen one', await bg('menu'), DARK);
+    check('an element whose id the specificity padding names is overridden too',
+        await bg('changecolors-a'), DARK);
+    check('and its text as well', await color('changecolors-a'), TEXT);
     check('translucent overlay is cleared', await bg('scrim'), CLEAR);
     check('a solid background written as oklch() is kept, not cleared', await bg('modern'), DARK);
     check('a translucent oklch() background is cleared', await bg('modernScrim'), CLEAR);
@@ -325,7 +336,51 @@ try {
     })()`), HOSTS);
     check('and nothing is left waiting',
         `${hosts.roots}/${hosts.elements}/${hosts.walks}`, '0/0/0');
+    // Two shadow trees were on the page before this: the widget and the one
+    // nested inside it.
+    check('and every one of them is held, along with the two already there',
+        `${hosts.styledRoots}/${hosts.observedRoots}`, `${HOSTS + 2}/${HOSTS + 2}`);
+
+    // Holding a shadow tree means holding its host and everything under it. A
+    // page that rebuilds its components - which is what a long-lived single
+    // page application does all day - would hand the agent the whole history of
+    // itself if what it holds were only ever added to.
     await evaluate(sessionId, `document.getElementById('hosts').remove()`);
+    const dropped = await (async () => {
+        const until = Date.now() + 20000;
+        for (;;) {
+            const state = JSON.parse(await agentPending(false));
+            if (state.styledRoots <= 2 || Date.now() > until) {
+                return state;
+            }
+            await sleep(100);
+        }
+    })();
+    check('taking them out of the page makes the agent let go of them',
+        `${dropped.styledRoots}/${dropped.observedRoots}`, '2/2');
+    // And letting go of one is not losing it: a host put back in the page is
+    // walked again like anything else added to it.
+    await evaluate(sessionId, `(() => {
+        const item = document.createElement('div');
+        item.id = 'detachable';
+        item.attachShadow({mode: 'open'}).innerHTML = '<span id="back">back</span>';
+        window.__detached = item;
+        document.body.appendChild(item);
+    })()`);
+    await sleep(600);
+    await evaluate(sessionId, `document.getElementById('detachable').remove()`);
+    await sleep(600);
+    await evaluate(sessionId, 'document.body.appendChild(window.__detached)');
+    await sleep(800);
+    check('a shadow tree put back in the page is styled again', await evaluate(sessionId,
+        `getComputedStyle(document.getElementById('detachable').shadowRoot.getElementById('back')).color`),
+        TEXT);
+    await evaluate(sessionId, `document.getElementById('detachable').remove()`);
+    await sleep(600);
+
+    check('and the trees still in the page are still styled',
+        await evaluate(sessionId, `getComputedStyle(${'document.getElementById("widget").shadowRoot.getElementById("shadowText")'}).color`),
+        TEXT);
     await idle();
 
     /* ----------------------------------------------------------- shadow DOM */

@@ -143,9 +143,34 @@ runs on Manifest V3, with the same features and the same settings.
   at a shadow boundary just as colors do. Switching the override off undoes the
   styling in every shadow root it reached, and the delayed rescans it schedules
   cannot bring a stopped agent back to life.
+- Fixed: **a button that said it would take the override off a page did not**.
+  A per-page or per-domain inclusion used to beat any exclusion, so a page
+  turned on individually stayed on however often "no global override on this
+  page" was pressed afterwards. What a page gets is now decided by the narrowest
+  thing said about it - the page, then the domain, then the global setting - and
+  a scope is never on both lists at once. The keyboard shortcuts make the same
+  change as the button next to them, which they also did not before: with the
+  global override on, they used to change the list that was not being read.
+- Fixed: two settings changes at once lost one of them. A change is a read of
+  the settings, an edit and a write of the whole list; the popup and the
+  shortcuts now make theirs one at a time in the service worker, and the popup's
+  buttons are disabled for the moment one takes.
+- Fixed: the page agent held on to every shadow tree it ever styled, and through
+  it to the host and the whole subtree under it, until the tab was closed. A
+  page that rebuilds its components - which is what a long-lived single page
+  application does all day - handed it the whole history of itself. Trees taken
+  out of the page are now let go of, a few hundred at a time, after something is
+  removed; one put back is styled again like anything else added to the page.
+- Fixed: a sub frame committing into a page the extension had not been able to
+  write down took the styling of whatever page the tab was showing before it -
+  a bare page with one colored iframe in it, recorded as if it were meant.
+  A frame whose parent is not recognised is now left alone until the next full
+  resync.
 - Fixed: a site's own `!important` declaration on an id or class selector used to
   win against the extension, leaving patches of unreadable text. The generated
-  selectors carry specificity padding now.
+  selectors carry specificity padding now - written so that it cannot match
+  anything itself, where the first version of it would have left an element out
+  of the override if the site happened to use one of the ids it names.
 - Fixed: with "use web pages colors" enabled, the generated stylesheet started
   with the string `undefined` and the whole first rule was dropped.
 - Fixed invalid declarations in the generated CSS: `text-shadow: 0` is now
@@ -186,6 +211,8 @@ runs on Manifest V3, with the same features and the same settings.
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
 | `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
 | `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
+| `test/settings.test.mjs` | Checks that each override button does what its label says, and that two changes at once do not lose one |
+| `tools/stage.mjs`    | Copies the files that ship into `build/`                   |
 
 ## Development
 
@@ -223,4 +250,23 @@ npm run demo:prerender
 
 which serves the two pages and prints the steps.
 
-Set `CHROME` if Chrome is not at the default Windows install path.
+Set `CHROME` to pick the browser those two use. Without it the usual install
+paths for Chrome and Chromium are tried, and if none of them is there the test
+says `SKIP` rather than failing on a path that belongs to another machine.
+
+## Packaging
+
+The folder that is worked in is not the folder that ships. It also holds the
+tests, the editor's project file and `release/change-color-2.244.crx` - the
+packed Manifest V2 version, which carries that whole extension, jQuery and
+jscolor inside it. None of that runs once installed, which is exactly why it
+should not be in the package: nobody auditing what was shipped can tell dormant
+code from live code without reading all of it.
+
+```
+npm run stage
+```
+
+copies the files the extension is actually made of into `build/`, from a list
+in `tools/stage.mjs`, and checks that everything the manifest names is among
+them. Pack `build/`.
