@@ -49,13 +49,17 @@ runs on Manifest V3, with the same features and the same settings.
   affordable is that the stylesheets themselves are held once each, so a page
   costs a few dozen bytes of document ids.
 - Nothing is put into a page until the record that says so has been stored, and
-  what is stored first is the wider claim: every document is written down as
-  holding both what it has and what it is about to be given. A record that could
-  not be stored leaves the page untouched, which is a state that record still
-  describes; a record stored before the work covers more than the page holds if
-  the work half happens, and claiming a stylesheet that is not there only makes
-  a later removal a no-op. The exact result is stored afterwards, and that write
-  is the only one allowed to make the record say less.
+  what is stored first is the wider claim: a document about to be given a
+  stylesheet is written down as holding both what it has and what it is about to
+  get, and marked as uncertain. A record that could not be stored leaves the page
+  untouched, which is a state that record still describes. The exact result is
+  stored afterwards and the mark comes off; that write is the only one allowed to
+  make the record say less.
+- A service worker that stops between those two writes leaves a document marked
+  uncertain, and the next one puts it back in a known state before anything else:
+  everything the record admits to comes out, including the stylesheet the page
+  should end up with, and then that one goes in. Without the mark, the record's
+  claim would be read as fact and the stylesheet would never be inserted at all.
 - The service worker keeps what a page *should* have separate from what each
   document is known to *have*. A stylesheet is recorded only by an `insertCSS`
   that succeeded and taken off only by a `removeCSS` that succeeded, and each

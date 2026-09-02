@@ -46,31 +46,42 @@ function page(record, pageId, frames, css) {
     return record;
 }
 
+const STOPPED = new Error('the service worker stopped');
+
 /**
- * A browser that can be told to refuse to store anything, and remembers what
- * was done to each document and what was last stored.
+ * A browser that remembers what each document holds and what was last stored,
+ * and that can be told to refuse to store anything or to stop part way through.
+ *
+ * `removeCss` follows the real one: the request going through is what it
+ * reports, and a document that did not have that stylesheet is nothing to do
+ * rather than a failure. Only a document it cannot reach is false.
  */
-function browser({acceptSaves = true} = {}) {
-    const inPage = new Map();
+function browser({acceptSaves = true, stopAfter = Infinity, world = new Map()} = {}) {
+    const inPage = world;
     const calls = [];
     let stored = null;
+    let done = 0;
+    function step(what) {
+        calls.push(what);
+        done++;
+        if (done > stopAfter) {
+            throw STOPPED;
+        }
+    }
     const io = {
         insertCss(documentId, css) {
-            calls.push('insert ' + documentId);
+            step('insert ' + documentId);
             inPage.set(documentId, (inPage.get(documentId) || []).concat([css]));
             return Promise.resolve(true);
         },
         removeCss(documentId, css) {
-            calls.push('remove ' + documentId);
+            step('remove ' + documentId);
             const held = inPage.get(documentId) || [];
-            if (!held.includes(css)) {
-                return Promise.resolve(false);
-            }
             inPage.set(documentId, held.filter(text => text !== css));
             return Promise.resolve(true);
         },
         save(record) {
-            calls.push('save');
+            step('save');
             if (!io.acceptSaves) {
                 return Promise.resolve(false);
             }
@@ -79,10 +90,14 @@ function browser({acceptSaves = true} = {}) {
             return Promise.resolve(true);
         },
         applyAgent(documentId) {
-            calls.push('agent ' + documentId);
+            step('agent ' + documentId);
             return Promise.resolve();
         },
         acceptSaves,
+        /** The same pages, seen by a service worker that has just started. */
+        restart(options) {
+            return browser(Object.assign({world: inPage}, options));
+        },
         // What the pages hold, against what the last stored record claims.
         stranded() {
             const record = readRecord(stored);
@@ -91,6 +106,22 @@ function browser({acceptSaves = true} = {}) {
                 for (const css of held) {
                     if (!sheetsOf(record, documentId).includes(css)) {
                         out.push(documentId + ' holds an unrecorded stylesheet');
+                    }
+                }
+            }
+            return out;
+        },
+        /** Stylesheets the record claims that the page does not have. */
+        phantom(only) {
+            const record = readRecord(stored);
+            const out = [];
+            for (const documentId of Object.keys(record.documents)) {
+                if (only && documentId !== only) {
+                    continue;
+                }
+                for (const css of sheetsOf(record, documentId)) {
+                    if (!(inPage.get(documentId) || []).includes(css)) {
+                        out.push(documentId + ' is claimed to hold what it does not');
                     }
                 }
             }
@@ -181,6 +212,84 @@ check('the old stylesheet came out and the new one went in',
     swapping.held('page'), ['css-new']);
 check('and what the page holds is what the record says',
     sheetsOf(readRecord(swapping.stored), 'page'), ['css-new']);
+
+/* --------------------------- a worker that stops part way through the work */
+
+// Everything the record says has been written down before it became true, so a
+// worker that stops in the middle leaves a record that says more than the page
+// holds. The next worker has to be able to tell that from a record that is
+// exact, and to put the document back in a known state either way.
+
+/** Runs a sync that stops after `stopAfter` browser calls, then a fresh one. */
+async function interrupted(stopAfter, {startWith, decisionCss} = {}) {
+    const record = readRecord(null);
+    record.top = 'page';
+    if (startWith) {
+        page(record, 'page', 0, startWith);
+    }
+    const first = browser({stopAfter: stopAfter});
+    if (startWith) {
+        await first.insertCss('page', startWith);
+    }
+    try {
+        await syncPage(first, 'page', decision(decisionCss || 'css-new'), record);
+    } catch (error) {
+        if (error !== STOPPED) {
+            throw error;
+        }
+    }
+    // A new worker knows only what was stored.
+    const revived = readRecord(JSON.parse(JSON.stringify(first.stored)));
+    const second = first.restart();
+    await syncPage(second, 'page', decision(decisionCss || 'css-new'), revived);
+    return {first: first, second: second, record: revived};
+}
+
+// Stopped after the write-ahead save, before anything was put in the page.
+const beforeInsert = await interrupted(1);
+check('a stylesheet the record claimed but never got in is put in',
+    beforeInsert.second.held('page'), ['css-new']);
+check('exactly once', beforeInsert.second.held('page').length, 1);
+check('and the record ends up exact',
+    beforeInsert.second.phantom().concat(beforeInsert.second.stranded()), []);
+check('with nothing left uncertain',
+    Object.keys(beforeInsert.record.uncertain), []);
+
+// Stopped after the old stylesheet came out, before the new one went in.
+const betweenSwap = await interrupted(2, {startWith: 'css-old'});
+check('a swap that stopped half way ends with only the new stylesheet',
+    betweenSwap.second.held('page'), ['css-new']);
+check('and a record that matches it',
+    betweenSwap.second.phantom().concat(betweenSwap.second.stranded()), []);
+
+// Stopped after the insert, before the exact record could be stored.
+const afterInsert = await interrupted(3);
+check('a stylesheet that got in before the stop is not put in twice',
+    afterInsert.second.held('page'), ['css-new']);
+check('and the record matches the page',
+    afterInsert.second.phantom().concat(afterInsert.second.stranded()), []);
+
+// The same, for a sub frame that commits.
+const frameRecord = readRecord(null);
+frameRecord.top = 'page';
+page(frameRecord, 'page', 0, 'css-page');
+const frameFirst = browser({stopAfter: 1});
+try {
+    await syncCommittedFrame(frameFirst, 'frame', 'page', frameRecord);
+} catch (error) {
+    if (error !== STOPPED) {
+        throw error;
+    }
+}
+const frameRevived = readRecord(JSON.parse(JSON.stringify(frameFirst.stored)));
+const frameSecond = frameFirst.restart();
+await syncCommittedFrame(frameSecond, 'frame', 'page', frameRevived);
+check('a sub frame interrupted before it was styled is styled by the next worker',
+    frameSecond.held('frame'), ['css-page']);
+check('once, with a record that matches',
+    frameSecond.phantom('frame').concat(frameSecond.stranded()), []);
+check('and nothing about it left uncertain',
+    Object.keys(frameRevived.uncertain), []);
 
 /* ------------------------------------------------ a sub frame that commits */
 

@@ -29,6 +29,16 @@
  *              many documents and decisions refer to it. The text is the only
  *              thing that can remove a stylesheet, it is a few kilobytes, and
  *              a tab's pages mostly want the same one.
+ *   uncertain  documentId -> true, while what `documents` says about it is a
+ *              claim about what it may hold rather than what it does. A
+ *              stylesheet has to be written down before it is put into a page,
+ *              so between the two the record is deliberately wider than the
+ *              truth - and a service worker that stops in there leaves that
+ *              wider claim behind for the next one, which would otherwise read
+ *              it as fact and never insert the stylesheet at all. Whoever picks
+ *              such a document up puts it back in a known state: take out
+ *              everything the record admits to, then put in what it should
+ *              have.
  *   top        the page the tab is actually showing. Only a fallback, for
  *              working out which page a sub frame belongs to when the browser
  *              does not say.
@@ -53,6 +63,7 @@ export function readRecord(value) {
         decisions: (value && value.decisions) || {},
         pages: (value && value.pages) || {},
         documents: (value && value.documents) || {},
+        uncertain: (value && value.uncertain) || {},
         sheets: (value && value.sheets) || [],
         top: (value && value.top) || null
     };
@@ -129,9 +140,27 @@ export function sheetsOf(record, documentId) {
     });
 }
 
+/**
+ * Whether what the record says about a document is a claim about what it may
+ * hold rather than what it does.
+ */
+export function isUncertain(record, documentId) {
+    return Boolean(record.uncertain[documentId]);
+}
+
+export function markUncertain(record, documentId) {
+    record.uncertain[documentId] = true;
+}
+
+export function settle(record, documentId) {
+    delete record.uncertain[documentId];
+}
+
 export function setSheets(record, documentId, texts) {
     if (!texts.length) {
         delete record.documents[documentId];
+        // Nothing is claimed, so there is nothing left to be wrong about.
+        delete record.uncertain[documentId];
         return;
     }
     record.documents[documentId] = texts.map(function (css) {
@@ -151,6 +180,11 @@ export function compact(record) {
             moved.set(index, sheets.push(record.sheets[index]) - 1);
         }
         return moved.get(index);
+    }
+    for (const id of Object.keys(record.uncertain)) {
+        if (!record.documents[id]) {
+            delete record.uncertain[id];
+        }
     }
     for (const id of Object.keys(record.documents)) {
         record.documents[id] = record.documents[id].map(keep);

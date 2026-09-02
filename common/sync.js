@@ -9,25 +9,38 @@
  *   - Nothing is put into a page until the record that says so has been stored.
  *     A record that could not be stored means the page is left exactly as it
  *     was, which is a state the record still describes correctly.
- *   - What is stored first is the wider claim: every document is written down
- *     as holding both what it has and what it is about to be given. If the
- *     work then half happens, or the service worker stops before the result can
- *     be stored, the record covers more than the page holds - and claiming a
- *     stylesheet that is not there only makes a later removal a no-op, while
- *     failing to claim one that is there strands it forever.
- *   - The exact result is stored afterwards, and that write is the only one
- *     allowed to make the record say less.
+ *   - What is stored first is the wider claim: a document about to be given a
+ *     stylesheet is written down as holding both what it has and what it is
+ *     about to get, and marked as uncertain - the record now says what it may
+ *     hold. Claiming a stylesheet that is not there only makes a later removal
+ *     a no-op, while failing to claim one that is there strands it forever.
+ *   - The exact result is stored afterwards and the mark comes off. That write
+ *     is the only one allowed to make the record say less.
  *
- * `io` is what talks to the browser: insertCss and removeCss resolve true only
- * if the document really changed, save resolves true only if the record was
- * stored, and applyAgent runs the page agent. Passing it in is what lets this
- * be tested against a browser that refuses to store anything.
+ * A service worker that stops between those two writes leaves a document marked
+ * uncertain, and the next one puts it back in a known state before doing
+ * anything else: everything the record admits to comes out, including the
+ * stylesheet the page should end up with, and then that one goes in. Removing a
+ * stylesheet a document does not have is a no-op, so this is always safe, and
+ * it is the only way to tell "the record says Y is in there" from "Y really is
+ * in there".
+ *
+ * `io` is what talks to the browser. insertCss resolves true only if the
+ * stylesheet is now in the document. removeCss resolves true if the request
+ * went through, which includes a document that did not have it in the first
+ * place - the browser treats that as nothing to do - and false only if the
+ * document could not be reached at all. save resolves true only if the record
+ * was stored. Passing all of it in is what lets this be tested against a
+ * browser that refuses to store anything, or stops half way.
  */
 import {
     decisionFor,
     documentsOfPage,
+    isUncertain,
+    markUncertain,
     setDecision,
     setSheets,
+    settle,
     sheetsOf
 } from './record.js';
 
@@ -40,13 +53,21 @@ function union(texts, css) {
 
 /**
  * Brings one document in line, given what it is known to hold. Records what it
- * ends up holding: a stylesheet stays on the list unless removing it succeeded,
- * and joins the list only if inserting it did.
+ * ends up holding: a stylesheet stays on the list unless removing it went
+ * through, and joins the list only if inserting it did.
+ *
+ * `unsure` says the list is what the document may hold rather than what it
+ * does, so even the stylesheet it should end up with is taken out first and put
+ * back - the only way to be sure it is there exactly once.
  */
-export async function syncDocument(io, documentId, wantedCss, record, present) {
+export async function syncDocument(io, documentId, wantedCss, record, present, unsure) {
     const kept = [];
     for (const css of present) {
-        if (css === wantedCss || !await io.removeCss(documentId, css)) {
+        if (!unsure && css === wantedCss) {
+            kept.push(css);
+            continue;
+        }
+        if (!await io.removeCss(documentId, css)) {
             kept.push(css);
         }
     }
@@ -55,7 +76,17 @@ export async function syncDocument(io, documentId, wantedCss, record, present) {
         kept.push(wantedCss);
     }
     setSheets(record, documentId, kept);
+    settle(record, documentId);
     return kept;
+}
+
+/** Writes down what a document may hold, before it is given anything. */
+function claim(record, documentId, present, wantedCss) {
+    const widened = union(present, wantedCss);
+    if (widened !== present) {
+        markUncertain(record, documentId);
+    }
+    setSheets(record, documentId, widened);
 }
 
 /**
@@ -73,14 +104,16 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
     }
 
     const present = new Map();
+    const unsure = new Map();
     for (const id of ids) {
         present.set(id, sheetsOf(record, id));
+        unsure.set(id, isUncertain(record, id));
     }
 
     setDecision(record, pageId, decision);
     for (const id of ids) {
         record.pages[id] = pageId;
-        setSheets(record, id, union(present.get(id), decision.css));
+        claim(record, id, present.get(id), decision.css);
     }
     if (!await io.save(record)) {
         // The page is untouched, and that is what the stored record still says.
@@ -88,7 +121,11 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
     }
 
     for (const id of ids) {
-        await syncDocument(io, id, decision.css, record, present.get(id));
+        // Only a document that was already unsure when this began needs putting
+        // back in a known state. The mark this run just made says the same
+        // thing to the next worker, not to this one: it has not inserted
+        // anything yet, and `present` says so.
+        await syncDocument(io, id, decision.css, record, present.get(id), unsure.get(id));
     }
     await io.save(record);
 
@@ -106,14 +143,15 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
 export async function syncCommittedFrame(io, documentId, pageId, record) {
     const decision = decisionFor(record, pageId);
     const present = sheetsOf(record, documentId);
+    const unsure = isUncertain(record, documentId);
 
     record.pages[documentId] = pageId;
-    setSheets(record, documentId, union(present, decision.css));
+    claim(record, documentId, present, decision.css);
     if (!await io.save(record)) {
         return false;
     }
 
-    await syncDocument(io, documentId, decision.css, record, present);
+    await syncDocument(io, documentId, decision.css, record, present, unsure);
     await io.save(record);
     await io.applyAgent(documentId, decision);
     return true;

@@ -30,6 +30,13 @@
     // A flush walks at most this many elements; what is left over is picked up
     // by the next one, right away.
     const MAX_PER_FLUSH = 6000;
+    // And holds at most this many subtrees waiting to be walked, taking on at
+    // most this many more in one go. Without a limit on the queue itself, a page
+    // that adds tens of thousands of separate subtrees at once would have a tree
+    // walker alive for every one of them before the first was walked: bounding
+    // the work of a flush is not the same as bounding what is waiting.
+    const MAX_QUEUED_WALKS = 4000;
+    const MAX_ROOTS_PER_FLUSH = 1000;
     const CONTINUE_DELAY = 16;
 
     const OBSERVED = {
@@ -318,24 +325,22 @@
             pendingElements.add(element);
         }
 
-        // Taking a root on costs a tree walker and a place in the queue, so
-        // this is bounded like everything else: a page that adds a few thousand
-        // separate subtrees at once has them taken on over several flushes
-        // rather than all at once.
-        const rootsLater = [];
-        pendingRoots.forEach(function (root) {
-            if (budget <= 0) {
-                rootsLater.push(root);
-                return;
+        // Taking a root on costs a tree walker and a place in the queue, so this
+        // is bounded like everything else: a page that adds thousands of
+        // separate subtrees at once has them taken on over several flushes. The
+        // ones not reached are left in the set exactly where they are - looking
+        // at them at all is the work being avoided.
+        let intake = Math.min(MAX_ROOTS_PER_FLUSH, MAX_QUEUED_WALKS - walks.length);
+        for (const root of pendingRoots) {
+            if (intake <= 0 || budget <= 0) {
+                break;
             }
+            pendingRoots.delete(root);
+            intake--;
+            budget--;
             if (root.isConnected !== false) {
-                budget--;
                 queueWalk(root);
             }
-        });
-        pendingRoots.clear();
-        for (const root of rootsLater) {
-            pendingRoots.add(root);
         }
 
         while (walks.length && budget > 0) {
@@ -477,6 +482,14 @@
     window.__changeColorsAgent = {
         setCss: setCss,
         rescan: rescan,
+        /** What is still waiting, so that the bound on a flush can be observed. */
+        pending: function () {
+            return {
+                roots: pendingRoots.size,
+                elements: pendingElements.size,
+                walks: walks.length
+            };
+        },
         stop: function () {
             stopped = true;
             observer.disconnect();

@@ -216,6 +216,48 @@ try {
     check('content added later, with a background, is painted', await bg('lateSolid'), DARK);
     check('content added later, without one, is cleared', await bg('lateClear'), CLEAR);
 
+    /* -------------------------------------------- more at once than a flush */
+
+    // A page can hand the agent an unbounded amount of work in one go. What it
+    // takes on in a single flush is capped, and what it does not take on waits
+    // where it is rather than being walked, copied or dropped.
+    const ROOTS = 20000;
+    // Sampled from the page, because what is being checked is the size of a
+    // single flush's bite, which is over before anything outside could look.
+    await evaluate(sessionId, `(() => {
+        window.__flood = {walks: 0};
+        window.__floodTimer = setInterval(() => {
+            const pending = window.__changeColorsAgent.pending();
+            window.__flood.walks = Math.max(window.__flood.walks, pending.walks);
+        }, 5);
+    })()`);
+    await evaluate(sessionId, `(() => {
+        // Added straight to the body, so each one is a root of its own to
+        // anything watching the document rather than one subtree with many
+        // children in it.
+        const batch = document.createDocumentFragment();
+        for (let i = 0; i < ${ROOTS}; i++) {
+            const item = document.createElement('div');
+            item.className = 'flood';
+            item.appendChild(document.createElement('span'));
+            batch.appendChild(item);
+        }
+        document.body.appendChild(batch);
+    })()`);
+    await sleep(4000);
+    await evaluate(sessionId, 'clearInterval(window.__floodTimer)');
+    const mostQueued = await evaluate(sessionId, 'window.__flood.walks');
+    check('no more subtrees are taken on at once than a flush is allowed',
+        mostQueued, mostQueued > 0 && mostQueued <= 6000 ? mostQueued : '1 to 6000');
+
+    check('all of it is measured in the end', await evaluate(sessionId,
+        `document.querySelectorAll('div.flood[data-changecolors-clear]').length`), ROOTS);
+    check('and nothing is left waiting', await evaluate(sessionId,
+        'JSON.stringify(window.__changeColorsAgent.pending())'),
+        JSON.stringify({roots: 0, elements: 0, walks: 0}));
+    await evaluate(sessionId,
+        `document.querySelectorAll('div.flood').forEach(el => el.remove())`);
+
     /* ----------------------------------------------------------- shadow DOM */
 
     const shadowText = 'document.getElementById("widget").shadowRoot.getElementById("shadowText")';

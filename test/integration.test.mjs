@@ -192,6 +192,37 @@ async function attach(target) {
 }
 
 /**
+ * Attaches to the page showing `url`, and to the document it is showing now.
+ *
+ * A tab keeps its target across a navigation, so attaching to it during one can
+ * leave a session still talking to the document being replaced - which, having
+ * been styled a moment ago, answers every question with the old page's colors
+ * and never changes. Asking that session where it is is what tells the two
+ * apart.
+ */
+async function openPage(match, timeout = 15000) {
+    const until = Date.now() + timeout;
+    for (;;) {
+        const target = await findTarget(x => x.type === 'page' && x.url.includes(match));
+        if (target) {
+            const session = await attach(target);
+            try {
+                const here = await evaluate(session, 'location.href');
+                if (here.includes(match)) {
+                    return session;
+                }
+            } catch (e) {
+                // The document went away underneath us; look again.
+            }
+        }
+        if (Date.now() > until) {
+            throw new Error('no page showing ' + match);
+        }
+        await sleep(250);
+    }
+}
+
+/**
  * Waits for something to reach a value, up to a deadline, and returns whatever
  * it last saw. What is being asserted is where the extension settles: the work
  * is queued behind everything else the tab is doing, so a fixed wait either
@@ -247,8 +278,7 @@ try {
         return top ? top.documentId : null;
     })()`);
 
-    const pageTarget = await findTarget(x => x.type === 'page' && x.url.startsWith('http://localhost'));
-    let sessionId = await attach(pageTarget);
+    let sessionId = await openPage('http://localhost');
     const bg = expression => evaluate(sessionId, `getComputedStyle(${expression}).backgroundColor`);
     const FRAME_DOC = "document.getElementById('f').contentDocument";
     const frameBg = id => bg(`${FRAME_DOC}.getElementById(${JSON.stringify(id)})`);
@@ -268,7 +298,7 @@ try {
 
     await evaluate(sessionId, 'location.href = "/?second"');
     await sleep(2500);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('second')));
+    sessionId = await openPage('second');
     check('a new document is styled', await bg('document.body'), DARK);
     check('its sub frame is styled too', await frameBodyBg(), DARK);
     check('the sub frame is measured as well', await frameBg('frameOverlay'), CLEAR);
@@ -301,7 +331,7 @@ try {
     await sleep(500);
     await evaluate(sessionId, 'location.href = "/big"');
     await sleep(4000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/big')));
+    sessionId = await openPage('/big');
     check('the far end of a 9000 element document is painted',
         await bg('document.getElementById("big8999")'), DARK);
     check('the far end of a 9000 element document is measured',
@@ -315,7 +345,7 @@ try {
     await sleep(1000);
     await settings({DefaultBrowserColor: true, DefaultBrowserFont: false, OverrideFontName: 'Georgia'});
     await sleep(2500);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('fonts')));
+    sessionId = await openPage('fonts');
     check('a font-only override keeps the page colors',
         await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
     check('a font-only override reaches into a shadow tree', await evaluate(sessionId,
@@ -343,7 +373,7 @@ try {
     await evaluate(sessionId, 'location.href = "/redirect"');
     await settings({background_color: '445566'});
     await sleep(2000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
+    sessionId = await openPage('/plain');
     check('a document that replaced another is left alone if it is excluded',
         await settles(() => evaluate(sessionId,
             'getComputedStyle(document.body).backgroundColor'), WHITE), WHITE);
@@ -361,20 +391,20 @@ try {
     await sleep(1500);
     await evaluate(sessionId, 'location.href = "/?cached"');
     await sleep(2500);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
+    sessionId = await openPage('cached');
     check('the page to be cached is styled', await bg('document.body'), DARK);
     await evaluate(sessionId, 'window.__cacheMarker = 1');
     const documentBefore = await topDocumentId();
 
     await evaluate(sessionId, 'location.href = "/plain"');
     await sleep(2000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
+    sessionId = await openPage('/plain');
     // The colors change while the page sits in the cache.
     await settings({background_color: '223344'});
     await sleep(1500);
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
+    sessionId = await openPage('cached');
     // Everything below is about a *restored* document. A browser that reloaded
     // the page instead would pass the colour checks without ever exercising
     // that path, so this is asserted rather than reported.
@@ -403,7 +433,7 @@ try {
     await sleep(1500);
     await evaluate(sessionId, 'location.href = "/?agent"');
     await sleep(3000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('agent')));
+    sessionId = await openPage('agent');
     check('the page about to be cached is styled', await bg('document.body'), DARK);
     check('its sub frame is styled', await frameBodyBg(), DARK);
     check('its shadow tree is styled', await shadowColor(), TEXT);
@@ -411,12 +441,12 @@ try {
 
     await evaluate(sessionId, 'location.href = "/plain"');
     await sleep(2000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
+    sessionId = await openPage('/plain');
     await settings({OverrideAll: false});
     await sleep(1500);
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('agent')));
+    sessionId = await openPage('agent');
     check('the document with the sub frame came back from the cache',
         await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
     check('a restored document loses the stylesheet it was left with',
@@ -457,18 +487,18 @@ try {
     await sleep(1500);
     await evaluate(sessionId, 'location.href = "/?ignored"');
     await sleep(3000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('ignored')));
+    sessionId = await openPage('ignored');
     check('the page behind the untouched one is styled', await bg('document.body'), DARK);
     await evaluate(sessionId, 'window.__cacheMarker = 1');
 
     await evaluate(sessionId, 'location.href = "about:blank"');
     await sleep(2500);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url === 'about:blank'));
+    sessionId = await openPage('about:blank');
     await settings({background_color: '445566'});
     await sleep(1500);
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('ignored')));
+    sessionId = await openPage('ignored');
     check('the document behind the untouched page came back from the cache',
         await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
     await settings({OverrideAll: false});
@@ -559,7 +589,7 @@ try {
 
     await goTo(`http://localhost:${PORT}/prerendered`);
     await sleep(3000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/prerendered')));
+    sessionId = await openPage('/prerendered');
     check('and it is left alone once it is the page on screen',
         await bg('document.body'), WHITE);
     check('sub frame included', await frameBodyBg(), WHITE);
