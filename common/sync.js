@@ -58,10 +58,18 @@ function union(texts, css) {
  *
  * `unsure` says the list is what the document may hold rather than what it
  * does, so even the stylesheet it should end up with is taken out first and put
- * back - the only way to be sure it is there exactly once.
+ * back - the only way to be sure it is there exactly once. That only settles
+ * the question if the removals actually went through: a document that could not
+ * be reached this time is still a document nobody knows the contents of, and
+ * saying otherwise would leave the stylesheet it should have been given
+ * unclaimed and never inserted. It stays uncertain until someone reaches it.
+ *
+ * An insert that fails needs no such care. The removals that came before it
+ * succeeded, so what the document holds is known exactly: nothing of ours.
  */
 export async function syncDocument(io, documentId, wantedCss, record, present, unsure) {
     const kept = [];
+    let known = true;
     for (const css of present) {
         if (!unsure && css === wantedCss) {
             kept.push(css);
@@ -69,6 +77,9 @@ export async function syncDocument(io, documentId, wantedCss, record, present, u
         }
         if (!await io.removeCss(documentId, css)) {
             kept.push(css);
+            if (unsure) {
+                known = false;
+            }
         }
     }
     if (wantedCss && !kept.includes(wantedCss) &&
@@ -76,7 +87,11 @@ export async function syncDocument(io, documentId, wantedCss, record, present, u
         kept.push(wantedCss);
     }
     setSheets(record, documentId, kept);
-    settle(record, documentId);
+    if (known) {
+        settle(record, documentId);
+    } else {
+        markUncertain(record, documentId);
+    }
     return kept;
 }
 

@@ -232,6 +232,11 @@
     // changed), and single elements to re-check.
     const pendingRoots = new Set();
     const pendingElements = new Set();
+    // The high water marks of what a flush takes on, kept where the work happens
+    // rather than sampled from outside: a flush runs to completion, so nothing
+    // outside can see the middle of one.
+    const stats = {maxWalks: 0, maxRootsTaken: 0, maxElementsTaken: 0};
+
     // Walks left unfinished by a flush that ran out of budget, and the roots
     // they belong to: a root already being walked is not queued a second time.
     // A page that keeps changing a class on a big container would otherwise
@@ -255,6 +260,15 @@
             // reach this subtree on its way through.
             return;
         }
+        if (walks.length >= MAX_QUEUED_WALKS) {
+            // The queue is as long as it is allowed to get. Nothing is dropped:
+            // it waits where the roots waiting to be taken on wait, and is taken
+            // on when there is room. Every way in comes through here, shadow
+            // roots found while walking included, so this is the only place the
+            // limit has to hold.
+            pendingRoots.add(root);
+            return;
+        }
         const walk = {
             root: root,
             walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT),
@@ -263,6 +277,7 @@
         };
         walking.set(root, walk);
         walks.push(walk);
+        stats.maxWalks = Math.max(stats.maxWalks, walks.length);
     }
 
     function finishWalk(walk) {
@@ -303,13 +318,17 @@
             }
         }
 
-        const later = [];
-        pendingElements.forEach(function (element) {
+        // Drained where they sit: the ones not reached stay in the set, which
+        // is the work being avoided. Copying the remainder out and back would
+        // be the cost this is meant to bound.
+        let elementsTaken = 0;
+        for (const element of pendingElements) {
             if (budget <= 0) {
-                later.push(element);
-                return;
+                break;
             }
+            pendingElements.delete(element);
             budget--;
+            elementsTaken++;
             // Checked here as well, because a component can attach its shadow
             // root long after the rescans below have stopped.
             if (element.shadowRoot && !observedRoots.has(element.shadowRoot)) {
@@ -319,29 +338,29 @@
             if (measuring) {
                 want(element, batch, seen);
             }
-        });
-        pendingElements.clear();
-        for (const element of later) {
-            pendingElements.add(element);
         }
+        stats.maxElementsTaken = Math.max(stats.maxElementsTaken, elementsTaken);
 
         // Taking a root on costs a tree walker and a place in the queue, so this
         // is bounded like everything else: a page that adds thousands of
         // separate subtrees at once has them taken on over several flushes. The
         // ones not reached are left in the set exactly where they are - looking
         // at them at all is the work being avoided.
-        let intake = Math.min(MAX_ROOTS_PER_FLUSH, MAX_QUEUED_WALKS - walks.length);
+        let intake = MAX_ROOTS_PER_FLUSH;
+        let rootsTaken = 0;
         for (const root of pendingRoots) {
-            if (intake <= 0 || budget <= 0) {
+            if (intake <= 0 || budget <= 0 || walks.length >= MAX_QUEUED_WALKS) {
                 break;
             }
             pendingRoots.delete(root);
             intake--;
             budget--;
+            rootsTaken++;
             if (root.isConnected !== false) {
                 queueWalk(root);
             }
         }
+        stats.maxRootsTaken = Math.max(stats.maxRootsTaken, rootsTaken);
 
         while (walks.length && budget > 0) {
             const walk = walks[0];
@@ -482,12 +501,24 @@
     window.__changeColorsAgent = {
         setCss: setCss,
         rescan: rescan,
-        /** What is still waiting, so that the bound on a flush can be observed. */
+        /**
+         * What is still waiting, and the most any one flush has taken on. The
+         * limits are the point of it: nothing outside can watch a flush, which
+         * runs to completion, so the marks are kept as it goes.
+         */
         pending: function () {
             return {
                 roots: pendingRoots.size,
                 elements: pendingElements.size,
-                walks: walks.length
+                walks: walks.length,
+                maxWalks: stats.maxWalks,
+                maxRootsTaken: stats.maxRootsTaken,
+                maxElementsTaken: stats.maxElementsTaken,
+                limits: {
+                    perFlush: MAX_PER_FLUSH,
+                    queuedWalks: MAX_QUEUED_WALKS,
+                    rootsPerFlush: MAX_ROOTS_PER_FLUSH
+                }
             };
         },
         stop: function () {

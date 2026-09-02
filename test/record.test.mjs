@@ -56,26 +56,37 @@ const STOPPED = new Error('the service worker stopped');
  * reports, and a document that did not have that stylesheet is nothing to do
  * rather than a failure. Only a document it cannot reach is false.
  */
-function browser({acceptSaves = true, stopAfter = Infinity, world = new Map()} = {}) {
+function browser({acceptSaves = true, world = new Map()} = {}) {
     const inPage = world;
     const calls = [];
     let stored = null;
-    let done = 0;
     function step(what) {
-        calls.push(what);
-        done++;
-        if (done > stopAfter) {
+        // Stopping is said in terms of the work, not how many calls have gone
+        // by: setting a page up is calls too, and an ordinal quietly moves when
+        // anything else does.
+        if (io.stopBefore && io.stopBefore(what, calls)) {
             throw STOPPED;
         }
+        calls.push(what);
     }
     const io = {
+        stopBefore: null,
+        // Documents the browser will not let anything reach, the way a frame
+        // that is going away refuses everything aimed at it.
+        unreachable: new Set(),
         insertCss(documentId, css) {
             step('insert ' + documentId);
+            if (io.unreachable.has(documentId)) {
+                return Promise.resolve(false);
+            }
             inPage.set(documentId, (inPage.get(documentId) || []).concat([css]));
             return Promise.resolve(true);
         },
         removeCss(documentId, css) {
             step('remove ' + documentId);
+            if (io.unreachable.has(documentId)) {
+                return Promise.resolve(false);
+            }
             const held = inPage.get(documentId) || [];
             inPage.set(documentId, held.filter(text => text !== css));
             return Promise.resolve(true);
@@ -94,6 +105,10 @@ function browser({acceptSaves = true, stopAfter = Infinity, world = new Map()} =
             return Promise.resolve();
         },
         acceptSaves,
+        /** Forgets the calls so far, so setting a page up is not part of a run. */
+        forgetCalls() {
+            calls.length = 0;
+        },
         /** The same pages, seen by a service worker that has just started. */
         restart(options) {
             return browser(Object.assign({world: inPage}, options));
@@ -220,17 +235,23 @@ check('and what the page holds is what the record says',
 // holds. The next worker has to be able to tell that from a record that is
 // exact, and to put the document back in a known state either way.
 
-/** Runs a sync that stops after `stopAfter` browser calls, then a fresh one. */
-async function interrupted(stopAfter, {startWith, decisionCss} = {}) {
+/**
+ * Runs a sync that stops where `stopBefore` says, then hands what was stored to
+ * a fresh worker looking at the same pages.
+ */
+async function interrupted(stopBefore, {startWith, decisionCss} = {}) {
     const record = readRecord(null);
     record.top = 'page';
     if (startWith) {
         page(record, 'page', 0, startWith);
     }
-    const first = browser({stopAfter: stopAfter});
+    const first = browser();
     if (startWith) {
         await first.insertCss('page', startWith);
     }
+    // Setting the page up is not part of the run being interrupted.
+    first.forgetCalls();
+    first.stopBefore = stopBefore;
     try {
         await syncPage(first, 'page', decision(decisionCss || 'css-new'), record);
     } catch (error) {
@@ -245,8 +266,13 @@ async function interrupted(stopAfter, {startWith, decisionCss} = {}) {
     return {first: first, second: second, record: revived};
 }
 
+const untilInsert = what => what === 'insert page';
+const untilSecondSave = (what, calls) =>
+    what === 'save' && calls.filter(c => c === 'save').length === 1;
+
 // Stopped after the write-ahead save, before anything was put in the page.
-const beforeInsert = await interrupted(1);
+const beforeInsert = await interrupted(untilInsert);
+check('it stopped where it was meant to', beforeInsert.first.calls, ['save']);
 check('a stylesheet the record claimed but never got in is put in',
     beforeInsert.second.held('page'), ['css-new']);
 check('exactly once', beforeInsert.second.held('page').length, 1);
@@ -256,24 +282,63 @@ check('with nothing left uncertain',
     Object.keys(beforeInsert.record.uncertain), []);
 
 // Stopped after the old stylesheet came out, before the new one went in.
-const betweenSwap = await interrupted(2, {startWith: 'css-old'});
+const betweenSwap = await interrupted(untilInsert, {startWith: 'css-old'});
+check('it stopped between the removal and the insert',
+    betweenSwap.first.calls, ['save', 'remove page']);
 check('a swap that stopped half way ends with only the new stylesheet',
     betweenSwap.second.held('page'), ['css-new']);
 check('and a record that matches it',
     betweenSwap.second.phantom().concat(betweenSwap.second.stranded()), []);
 
 // Stopped after the insert, before the exact record could be stored.
-const afterInsert = await interrupted(3);
+const afterInsert = await interrupted(untilSecondSave);
+check('it stopped after the insert and before the record of it',
+    afterInsert.first.calls, ['save', 'insert page']);
 check('a stylesheet that got in before the stop is not put in twice',
     afterInsert.second.held('page'), ['css-new']);
 check('and the record matches the page',
     afterInsert.second.phantom().concat(afterInsert.second.stranded()), []);
 
+/* ------------------- a document that cannot be reached while it is uncertain */
+
+// Recovery needs the document to answer. One that does not is still a document
+// nobody knows the contents of, and saying otherwise would leave the stylesheet
+// it should have been given unclaimed and never inserted.
+const outOfReach = readRecord(null);
+outOfReach.top = 'page';
+const stopping = browser();
+stopping.stopBefore = untilInsert;
+try {
+    await syncPage(stopping, 'page', decision('css-new'), outOfReach);
+} catch (error) {
+    if (error !== STOPPED) {
+        throw error;
+    }
+}
+const away = readRecord(JSON.parse(JSON.stringify(stopping.stored)));
+const unreachable = stopping.restart();
+unreachable.unreachable.add('page');
+await syncPage(unreachable, 'page', decision('css-new'), away);
+
+check('a document that could not be reached is left uncertain',
+    Object.keys(away.uncertain), ['page']);
+check('and is still claimed to hold what it may hold',
+    sheetsOf(away, 'page'), ['css-new']);
+check('and nothing was put in it', unreachable.held('page'), []);
+
+const backInReach = unreachable.restart();
+await syncPage(backInReach, 'page', decision('css-new'), away);
+check('once it answers again, the stylesheet goes in',
+    backInReach.held('page'), ['css-new']);
+check('once', backInReach.held('page').length, 1);
+check('and the record is exact again', Object.keys(away.uncertain), []);
+
 // The same, for a sub frame that commits.
 const frameRecord = readRecord(null);
 frameRecord.top = 'page';
 page(frameRecord, 'page', 0, 'css-page');
-const frameFirst = browser({stopAfter: 1});
+const frameFirst = browser();
+frameFirst.stopBefore = what => what === 'insert frame';
 try {
     await syncCommittedFrame(frameFirst, 'frame', 'page', frameRecord);
 } catch (error) {

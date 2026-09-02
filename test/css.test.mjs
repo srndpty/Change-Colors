@@ -218,43 +218,53 @@ try {
 
     /* -------------------------------------------- more at once than a flush */
 
-    // A page can hand the agent an unbounded amount of work in one go. What it
-    // takes on in a single flush is capped, and what it does not take on waits
-    // where it is rather than being walked, copied or dropped.
+    // A page can hand the agent an unbounded amount of work in one go: subtrees
+    // to walk, elements to look at again, shadow roots found while walking. What
+    // it takes on in one flush is capped, and so is what waits - a tree walker
+    // for every one of twenty thousand subtrees is not something to be holding
+    // before the first is walked. A flush runs to completion, so the marks are
+    // read from the agent rather than sampled from outside.
     const ROOTS = 20000;
-    // Sampled from the page, because what is being checked is the size of a
-    // single flush's bite, which is over before anything outside could look.
-    await evaluate(sessionId, `(() => {
-        window.__flood = {walks: 0};
-        window.__floodTimer = setInterval(() => {
-            const pending = window.__changeColorsAgent.pending();
-            window.__flood.walks = Math.max(window.__flood.walks, pending.walks);
-        }, 5);
-    })()`);
     await evaluate(sessionId, `(() => {
         // Added straight to the body, so each one is a root of its own to
         // anything watching the document rather than one subtree with many
-        // children in it.
+        // children in it. Every other one is a shadow host, which is the other
+        // way a walk gets queued.
         const batch = document.createDocumentFragment();
         for (let i = 0; i < ${ROOTS}; i++) {
             const item = document.createElement('div');
             item.className = 'flood';
-            item.appendChild(document.createElement('span'));
+            if (i % 2) {
+                item.attachShadow({mode: 'open'}).innerHTML = '<span>shadow</span>';
+            } else {
+                item.appendChild(document.createElement('span'));
+            }
             batch.appendChild(item);
         }
         document.body.appendChild(batch);
     })()`);
-    await sleep(4000);
-    await evaluate(sessionId, 'clearInterval(window.__floodTimer)');
-    const mostQueued = await evaluate(sessionId, 'window.__flood.walks');
-    check('no more subtrees are taken on at once than a flush is allowed',
-        mostQueued, mostQueued > 0 && mostQueued <= 6000 ? mostQueued : '1 to 6000');
+    await sleep(6000);
 
+    const flood = JSON.parse(await evaluate(sessionId,
+        'JSON.stringify(window.__changeColorsAgent.pending())'));
+    check('no flush takes on more subtrees than it is allowed',
+        flood.maxRootsTaken <= flood.limits.rootsPerFlush, true);
+    check('and it did take some on', flood.maxRootsTaken > 0, true);
+    check('no more walks are ever waiting than the queue allows',
+        flood.maxWalks <= flood.limits.queuedWalks, true);
+    check('and the queue really was pushed against that limit',
+        flood.maxWalks > flood.limits.queuedWalks / 2, true);
+    check('no flush takes on more elements than it is allowed',
+        flood.maxElementsTaken <= flood.limits.perFlush, true);
     check('all of it is measured in the end', await evaluate(sessionId,
         `document.querySelectorAll('div.flood[data-changecolors-clear]').length`), ROOTS);
-    check('and nothing is left waiting', await evaluate(sessionId,
-        'JSON.stringify(window.__changeColorsAgent.pending())'),
-        JSON.stringify({roots: 0, elements: 0, walks: 0}));
+    check('the shadow trees among it are styled too', await evaluate(sessionId, `(() => {
+        const hosts = [...document.querySelectorAll('div.flood')].filter(el => el.shadowRoot);
+        return hosts.filter(el => getComputedStyle(el.shadowRoot.querySelector('span')).color
+            === 'rgb(232, 232, 232)').length;
+    })()`), ROOTS / 2);
+    check('and nothing is left waiting',
+        `${flood.roots}/${flood.elements}/${flood.walks}`, '0/0/0');
     await evaluate(sessionId,
         `document.querySelectorAll('div.flood').forEach(el => el.remove())`);
 

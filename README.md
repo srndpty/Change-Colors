@@ -60,6 +60,9 @@ runs on Manifest V3, with the same features and the same settings.
   everything the record admits to comes out, including the stylesheet the page
   should end up with, and then that one goes in. Without the mark, the record's
   claim would be read as fact and the stylesheet would never be inserted at all.
+  The mark only comes off if the document answered: one that could not be reached
+  is still one whose contents nobody knows, and it stays uncertain until someone
+  reaches it.
 - The service worker keeps what a page *should* have separate from what each
   document is known to *have*. A stylesheet is recorded only by an `insertCSS`
   that succeeded and taken off only by a `removeCSS` that succeeded, and each
