@@ -1,11 +1,6 @@
 # Change Colors Privacy Policy
 
-Effective date: TODO - the date this is published
-
-> This file is the text of the privacy policy. It has to be reachable at a
-> public HTTPS URL before it can be entered in the Chrome Web Store listing, and
-> the three TODOs below have to be filled in first. GitHub Pages, or the raw
-> file on a public repository, both work.
+Effective date: 2026/9/3 - the date this is published
 
 Change Colors customizes the appearance of web pages according to settings
 selected by the user.
@@ -58,6 +53,6 @@ customization functionality.
 
 For privacy questions, contact:
 
-* TODO - developer name or organization
-* TODO - contact email
-* TODO - project or support URL
+* clair
+* q8xz-safe001@yahoo.co.jp
+* https://github.com/srndpty/Change-Colors
