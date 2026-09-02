@@ -37,12 +37,20 @@ button.action_btn
   font-family: inherit;
 }
 
-#unsupported
+#unsupported,
+#failed
 {
   color: #191919;
   font-size: 10pt;
   width: 200px;
   padding: 5px;
+}
+
+/* Shown when a change could not be handed to the service worker. Nothing was
+   written, so the buttons above are still showing what is stored. */
+#failed
+{
+  color: #8a1f1f;
 }
 
 #footer

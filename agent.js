@@ -127,10 +127,22 @@
         }
     }
 
-    /** Whether a shadow tree is still part of the page. */
+    /**
+     * Whether a shadow tree is still part of *this* page.
+     *
+     * Connected is not enough on its own. A host moved into another document -
+     * adoptNode(), or an <iframe> taking a subtree - stays connected there, and
+     * this agent, which belongs to the document it was injected in, must let go
+     * of it: the agent in that document is the one that styles it now. Hence
+     * the walk up from the root through however many shadow boundaries it sits
+     * behind, which is what `composed` does.
+     */
     function isAttached(root) {
         const host = root && root.host;
-        return Boolean(host && host.isConnected);
+        if (!host || !host.isConnected || host.ownerDocument !== document) {
+            return false;
+        }
+        return host.getRootNode({composed: true}) === document;
     }
 
     /**

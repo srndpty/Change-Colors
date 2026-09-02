@@ -45,6 +45,21 @@ function fail(message) {
 
 /* ------------------------------------------------- what is being released */
 
+// What is released has to be a commit, not a working copy. The hash of the
+// archive is printed at the end so that what was uploaded can be tied to what
+// is in the repository, and a tree with uncommitted changes in it cannot be
+// tied to anything. $ALLOW_DIRTY is for trying the gate out without releasing.
+const dirty = (spawnSync('git', ['status', '--porcelain'], {
+    cwd: ROOT, encoding: 'utf8'
+}).stdout || '').trim();
+if (dirty && !process.env.ALLOW_DIRTY) {
+    console.error('release stopped: the working tree has uncommitted changes:');
+    console.error(dirty);
+    console.error('Commit them, or set $ALLOW_DIRTY to build one that is not going');
+    console.error('to be uploaded.');
+    process.exit(1);
+}
+
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
 console.log(`=== version\npackage.json ${pkg.version}, manifest.json ${manifest.version}`);
@@ -98,18 +113,22 @@ writeZip(zip, files);
 const bytes = fs.readFileSync(zip);
 const hash = crypto.createHash('sha256').update(bytes).digest('hex');
 const commit = spawnSync('git', ['rev-parse', 'HEAD'], {cwd: ROOT, encoding: 'utf8'});
-const dirty = spawnSync('git', ['status', '--porcelain'], {cwd: ROOT, encoding: 'utf8'});
 
 console.log(`\n=== the package
 ${path.relative(ROOT, zip)}
 ${files.length} files, ${Math.round(bytes.length / 1024)} kB
 sha256 ${hash}
-commit ${(commit.stdout || '').trim() || 'unknown'}${(dirty.stdout || '').trim() ? ' (with uncommitted changes)' : ''}
+commit ${(commit.stdout || '').trim() || 'unknown'}${dirty ? ' (BUILT FROM A DIRTY TREE - do not upload)' : ''}
 
 Upload that file at https://chrome.google.com/webstore/devconsole - Package,
 "Upload new package". The manifest is at the root of it, which is what the
 store expects; a CRX is for loading one by hand, not for the store.
 
-One thing this cannot check: Chrome turns prerendering off for a tab with
-DevTools attached, so the prerendered-page case skipped above has to be walked
-through by hand - npm run demo:prerender prints the steps.`);
+Two things this cannot check:
+
+- Chrome turns prerendering off for a tab with DevTools attached, so the
+  prerendered-page case skipped above has to be walked through by hand -
+  npm run demo:prerender prints the steps.
+- The listing beside the package: description, single purpose, a justification
+  per permission, the data-usage answers, and a public URL for the privacy
+  policy. STORE_LISTING.md holds the text and PRIVACY.md the policy.`);

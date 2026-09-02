@@ -29,8 +29,18 @@ function setButton(id, label, scope, active) {
         // them one at a time; this keeps a second press from being queued
         // against what is still on screen.
         setBusy(true);
+        document.getElementById('failed').hidden = true;
         try {
             await requestOverrideChange(scope, currentTab.url, active);
+        } catch (e) {
+            // The change is only ever made in the service worker, so that all
+            // of them are made one at a time. Making this one here instead
+            // would be the second writer that was got rid of - so nothing is
+            // written, and the buttons go back to showing what is actually
+            // stored.
+            document.getElementById('failed').hidden = false;
+        }
+        try {
             await render();
         } finally {
             setBusy(false);

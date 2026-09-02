@@ -215,6 +215,9 @@ runs on Manifest V3, with the same features and the same settings.
 | `tools/stage.mjs`    | Copies the files that ship into `build/`                   |
 | `tools/release.mjs`  | The release gate: versions, tests, `build/` under test, the ZIP and its hash |
 | `tools/zip.mjs`      | Writes that ZIP, reproducibly                              |
+| `STORE_LISTING.md`   | The text of the store listing, and where each field comes from |
+| `PRIVACY.md`         | The privacy policy the listing links to                    |
+| `THIRD_PARTY_NOTICES.md` | What is somebody else's, under what license, and what was changed |
 
 ## Development
 
@@ -310,5 +313,13 @@ run - `$REQUIRE_BROWSER` makes a missing browser a failure instead of a skip,
 because "the tests did not fail" has to mean "the tests ran".
 
 The archive is written with a fixed timestamp on every entry, so the same
-sources give the same bytes and the same hash. Keep the hash with the tag it
-was built from.
+sources give the same bytes and the same hash. Keep the hash with the tag it was
+built from - which is why the gate refuses to build from a tree with
+uncommitted changes in it, unless `$ALLOW_DIRTY` says the ZIP is not going to be
+uploaded.
+
+What the store asks for besides the ZIP - the description, the single-purpose
+statement, a justification for each permission, the data-usage answers - is
+written out in [STORE_LISTING.md](STORE_LISTING.md), and the privacy policy the
+listing has to link to is [PRIVACY.md](PRIVACY.md). The policy needs a public
+HTTPS URL and has three things left to fill in before it can have one.

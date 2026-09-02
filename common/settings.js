@@ -238,29 +238,48 @@ export function toggleOverride(scope, url) {
 }
 
 /**
- * Asks the service worker to make the change, so that changes from the popup
- * and changes from a keyboard shortcut are made one at a time on the same
- * chain.
+ * Asks the service worker to make the change. Every change to the override
+ * lists is made there and nowhere else, so that they are made one at a time:
+ * the chain above only orders what is queued on it, and the popup is a page of
+ * its own with a chain of its own.
  *
- * If the worker does not answer the change is made here instead. That is only
- * safe because what is sent is the answer and not a change: a worker stopped
- * between saving and answering has already done exactly what this then does
- * again, and doing it again changes nothing.
+ * Which is why a failure here is not made good locally. Writing it from the
+ * popup instead would be a second read-modify-write beside the worker's, which
+ * is the thing being avoided - and the worker not answering does not even mean
+ * it did not save: it can be stopped between the two. So the message is sent
+ * again, and what is sent is the answer rather than a change, which is what
+ * makes sending it again safe. If it still does not get through, the caller is
+ * told, and the popup says so rather than showing a state nothing produced.
  */
 export async function requestOverrideChange(scope, url, active) {
-    try {
-        const answer = await chrome.runtime.sendMessage({
-            action: 'setOverride',
-            scope: scope,
-            url: url,
-            active: Boolean(active)
-        });
+    const message = {
+        action: 'setOverride',
+        scope: scope,
+        url: url,
+        active: Boolean(active)
+    };
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt) {
+            // A worker that has just been started takes a moment to have a
+            // listener.
+            await new Promise(function (resolve) {
+                setTimeout(resolve, 100);
+            });
+        }
+        let answer = null;
+        try {
+            answer = await chrome.runtime.sendMessage(message);
+        } catch (e) {
+            lastError = e;
+            continue;
+        }
         if (answer && answer.ok) {
             return;
         }
-    } catch (e) {
-        // Service worker did not answer, which says nothing about whether it
-        // did the work.
+        // It answered, and said no. The message is wrong - an unsupported URL,
+        // a scope nobody knows - and sending it again will not make it right.
+        throw new Error('the change was refused');
     }
-    await setOverride(scope, url, active);
+    throw lastError || new Error('the service worker did not answer');
 }

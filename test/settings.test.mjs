@@ -48,6 +48,7 @@ const {
     getOverrideState,
     getSettings,
     isScope,
+    requestOverrideChange,
     setOverride,
     toggleOverride,
     updateSettings
@@ -158,6 +159,57 @@ const refused = await setOverride('everything', URL_A, true).then(
 check('and a change naming one is refused rather than taken for a page',
     refused, 'refused');
 check('leaving the settings as they were', stored.OverridenPages, []);
+
+/* ------------------------------------------- what the popup does, and does not */
+
+// Every change to the lists is made in the service worker, so that they are
+// made one at a time. The popup asks; it never writes. A worker that does not
+// answer is asked again - the message says what the answer should be, so asking
+// twice is safe - and if it still does not answer, the popup says so rather
+// than writing beside the worker.
+function stubMessaging(answers) {
+    const sent = [];
+    chrome.runtime = {
+        async sendMessage(message) {
+            sent.push(message);
+            const answer = answers[Math.min(sent.length - 1, answers.length - 1)];
+            if (answer === 'unreachable') {
+                throw new Error('Could not establish connection.');
+            }
+            return answer;
+        }
+    };
+    return sent;
+}
+
+reset();
+let sent = stubMessaging([{ok: true}]);
+await requestOverrideChange('page', URL_A, true);
+check('the popup sends the answer it wants, not "turn it around"',
+    JSON.stringify(sent),
+    JSON.stringify([{action: 'setOverride', scope: 'page', url: URL_A, active: true}]));
+check('and writes nothing itself', stored.OverridenPages, []);
+
+sent = stubMessaging(['unreachable', 'unreachable', {ok: true}]);
+await requestOverrideChange('page', URL_A, true);
+check('a worker that cannot be reached is asked again', sent.length, 3);
+check('with the same message every time',
+    sent.every(m => m.active === true && m.scope === 'page'), true);
+
+sent = stubMessaging(['unreachable']);
+const gaveUp = await requestOverrideChange('page', URL_A, true)
+    .then(() => 'saved', () => 'told the caller');
+check('a worker that never answers is not worked around locally', gaveUp,
+    'told the caller');
+check('and the settings are left exactly as they were',
+    [stored.OverridenPages, stored.NotOverridenPages], [[], []]);
+
+sent = stubMessaging([{ok: false}]);
+const sentBack = await requestOverrideChange('page', URL_A, true)
+    .then(() => 'saved', () => 'told the caller');
+check('a change the worker refuses is not sent again', sent.length, 1);
+check('and is reported rather than retried for ever', sentBack, 'told the caller');
+delete chrome.runtime;
 
 /* --------------------------------------------- two changes at the same time */
 

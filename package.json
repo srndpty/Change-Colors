@@ -2,7 +2,7 @@
     "name": "change-colors",
     "version": "3.0.0",
     "private": true,
-    "description": "Chrome extension that restyles pages according to the user's preferences.",
+    "description": "Customize web page colors, fonts, images, and link styles for more comfortable reading.",
     "type": "module",
     "scripts": {
         "test": "node test/record.test.mjs && node test/settings.test.mjs && node test/migration.test.mjs && node test/css.test.mjs && node test/integration.test.mjs",
