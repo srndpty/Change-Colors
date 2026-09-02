@@ -38,6 +38,13 @@ runs on Manifest V3, with the same features and the same settings.
   `documentId`, so work decided for one document can only ever reach that
   document. A resync works from the tab's live frames rather than from the URL it
   was queued with, which can already be a page old.
+- Nothing that says a document holds a stylesheet is dropped on a guess. A
+  document the browser no longer lists is not necessarily gone - that is why the
+  record of which page each one belongs to exists at all - so there is no count
+  at which its entry stops being worth keeping: a page with sixty sub frames put
+  in the back/forward cache would otherwise come back with stylesheets nothing
+  could remove. What a tab knows goes when the tab goes, and only a refusal from
+  storage makes it give anything up, starting with what can least be missed.
 - The service worker keeps what a page *should* have separate from what each
   document is known to *have*. A stylesheet is recorded only by an `insertCSS`
   that succeeded and taken off only by a `removeCSS` that succeeded, and each
@@ -150,9 +157,11 @@ runs on Manifest V3, with the same features and the same settings.
 | `options.html/.js`   | Preferences                                                |
 | `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
 | `common/migration.js`| Carries version 2.x settings over, retried until it works   |
+| `common/record.js`   | What a tab knows, and the rules for forgetting any of it   |
 | `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
 | `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
+| `test/record.test.mjs` | What a tab is allowed to forget                           |
 | `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
 | `test/prerender-demo.mjs` | Serves the pages for checking prerendering by hand |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |

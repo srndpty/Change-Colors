@@ -36,6 +36,18 @@ import {
 } from './common/settings.js';
 import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
 import {migrateLegacySettings} from './common/migration.js';
+import {
+    NOTHING,
+    compact,
+    decisionFor,
+    documentsOfPage,
+    indexOfSheet,
+    isEmpty,
+    pageOf,
+    readRecord,
+    sheetsOf,
+    shed
+} from './common/record.js';
 
 const ICON_ON = 'icons/colors_icons.png';
 const ICON_OFF = 'icons/colors_icons_grey.png';
@@ -49,6 +61,10 @@ const INJECTED_PREFIX = 'injected:';
 const tabTasks = new Map();
 const latestResync = new Map();
 const navigations = new Map();
+// Tabs that closed while work for them was still running. Kept for the life of
+// the service worker, which is as long as anything can still be holding a
+// record for one: a browser session never gives a tab id out twice.
+const closedTabs = new Set();
 let sequence = 0;
 
 function navigationOf(tabId) {
@@ -114,160 +130,45 @@ function queueSync(tabId, url, fresh) {
 
 /* ------------------------------------------------------------ tab plumbing */
 
-/**
- * What is known about a tab.
- *
- * A tab is not one page. It holds the page it is showing, whatever the
- * back/forward cache is keeping for it, and any page it is prerendering, all at
- * once - so everything here is keyed by the document it belongs to rather than
- * by the tab.
- *
- *   decisions  pageId -> what that page should have: its stylesheet, the
- *              stylesheet for its shadow trees, and whether the agent has to
- *              measure. Written as soon as the page's top document commits,
- *              before anything is injected, because a sub frame commits while
- *              the injection is still running and has to read its own page's
- *              answer. It is the one decision for that page: a sub frame
- *              applies it rather than deciding again from settings that may
- *              have moved on since.
- *   pages      documentId -> the page it belongs to. This is how a document is
- *              reached at all: a page restored from the back/forward cache
- *              brings its sub frames back already loaded, they commit nothing,
- *              and `webNavigation.getAllFrames` does not list them - not even
- *              seconds later. It is deliberately independent of everything
- *              else, because a document with no stylesheet in it right now is
- *              exactly the one that has to be found when the settings change.
- *   documents  documentId -> the stylesheets believed to be in that document,
- *              as indices into `sheets`. A stylesheet is added only by an
- *              insertCSS that succeeded and taken away only by a removeCSS that
- *              succeeded. Each call names one document, so there is no partial
- *              success to misread: what the list says is what that document
- *              holds.
- *   sheets     the text of those stylesheets, held once however many documents
- *              have them. The text is the only thing that can remove a
- *              stylesheet, and it is a few kilobytes, so documents refer to it
- *              rather than repeat it.
- *   top        the page the tab is actually showing. Only a fallback, for
- *              working out which page a sub frame belongs to when the browser
- *              does not say.
- *
- * A document the browser no longer lists is not necessarily gone, so entries
- * are kept until there are more of them than any tab plausibly has, and the
- * ones in use are kept whatever the count. Everything for a tab goes when the
- * tab does.
- */
-const MAX_DOCUMENTS = 50;
+/* ------------------------------------------------------------ tab plumbing */
 
 function injectedKey(tabId) {
     return INJECTED_PREFIX + tabId;
 }
 
-/** What a page gets when nothing is meant to be applied to it. */
-const NOTHING = {css: null, shadowCss: null, probe: false};
-
 async function getRecord(tabId) {
     const stored = await chrome.storage.session.get(injectedKey(tabId));
-    const value = stored[injectedKey(tabId)];
-    return {
-        decisions: (value && value.decisions) || {},
-        pages: (value && value.pages) || {},
-        documents: (value && value.documents) || {},
-        sheets: (value && value.sheets) || [],
-        top: (value && value.top) || null
-    };
+    return readRecord(stored[injectedKey(tabId)]);
 }
 
 /**
- * What a page decided. A page nothing was decided for and a page decided to be
- * left alone are the same thing to a document: take the stylesheet out and stop
- * the agent.
+ * Stores what is known about a tab.
+ *
+ * There is no size at which this starts throwing away what it knows: a
+ * stylesheet forgotten while it is still in a page is one nothing can ever
+ * remove. Only a refusal from storage makes it give anything up, and then only
+ * what `shed()` is willing to part with, one piece at a time. If even that is
+ * not enough the record is left as it was - a record that could not be written
+ * is recoverable, a page in a state nothing knows about is not.
  */
-function decisionFor(record, pageId) {
-    return record.decisions[pageId] || NOTHING;
-}
-
-/** The page a document belongs to, as far as anything here knows. */
-function pageOf(record, documentId, parentDocumentId) {
-    if (record.pages[documentId]) {
-        return record.pages[documentId];
+async function saveRecord(tabId, record, keep) {
+    if (closedTabs.has(tabId)) {
+        return undefined;
     }
-    if (parentDocumentId && record.pages[parentDocumentId]) {
-        return record.pages[parentDocumentId];
-    }
-    return record.top;
-}
-
-/** Every document recorded as belonging to a page, the page's own aside. */
-function documentsOfPage(record, pageId) {
-    return Object.keys(record.pages).filter(function (id) {
-        return id !== pageId && record.pages[id] === pageId;
-    });
-}
-
-/** Drops the text of stylesheets no document refers to any more. */
-function compact(record) {
-    const sheets = [];
-    const moved = new Map();
-    for (const id of Object.keys(record.documents)) {
-        record.documents[id] = record.documents[id].map(function (index) {
-            if (!moved.has(index)) {
-                moved.set(index, sheets.push(record.sheets[index]) - 1);
-            }
-            return moved.get(index);
-        });
-    }
-    record.sheets = sheets;
-}
-
-function isEmpty(record) {
-    return !Object.keys(record.decisions).length &&
-        !Object.keys(record.pages).length &&
-        !Object.keys(record.documents).length;
-}
-
-function saveRecord(tabId, record) {
     compact(record);
     if (isEmpty(record)) {
         return chrome.storage.session.remove(injectedKey(tabId));
     }
-    return chrome.storage.session.set({[injectedKey(tabId)]: record});
-}
-
-function sheetsOf(record, documentId) {
-    return (record.documents[documentId] || []).map(function (index) {
-        return record.sheets[index];
-    });
-}
-
-function indexOfSheet(record, css) {
-    const index = record.sheets.indexOf(css);
-    return index === -1 ? record.sheets.push(css) - 1 : index;
-}
-
-/**
- * Forgets the oldest entries once a tab has more of them than it plausibly
- * needs. Anything in `keep` - the documents of the page just worked on - stays
- * whatever the count: those are the ones still being reached.
- */
-function trim(map, keep) {
-    const ids = Object.keys(map);
-    if (ids.length <= MAX_DOCUMENTS) {
-        return;
-    }
-    for (const id of ids) {
-        if (Object.keys(map).length <= MAX_DOCUMENTS) {
-            return;
-        }
-        if (!keep.has(id)) {
-            delete map[id];
+    for (;;) {
+        try {
+            return await chrome.storage.session.set({[injectedKey(tabId)]: record});
+        } catch (e) {
+            if (!shed(record, keep || new Set())) {
+                return undefined;
+            }
+            compact(record);
         }
     }
-}
-
-function forget(record, keep) {
-    trim(record.decisions, keep);
-    trim(record.pages, keep);
-    trim(record.documents, keep);
 }
 
 /**
@@ -511,13 +412,12 @@ async function syncPage(tabId, pageId, decision, record, alsoLive) {
     for (const id of ids) {
         record.pages[id] = pageId;
     }
-    await saveRecord(tabId, record);
+    await saveRecord(tabId, record, new Set(ids));
 
     for (const id of ids) {
         await syncDocument(tabId, id, decision.css, record);
     }
-    forget(record, new Set(ids));
-    await saveRecord(tabId, record);
+    await saveRecord(tabId, record, new Set(ids));
 
     for (const id of ids) {
         await applyAgent(tabId, id, decision);
@@ -633,7 +533,7 @@ chrome.webNavigation.onCommitted.addListener(function (details) {
         const decision = decisionFor(record, pageId);
         record.pages[details.documentId] = pageId;
         await syncDocument(details.tabId, details.documentId, decision.css, record);
-        await saveRecord(details.tabId, record);
+        await saveRecord(details.tabId, record, new Set([pageId, details.documentId]));
         await applyAgent(details.tabId, details.documentId, decision);
     });
 });
@@ -657,6 +557,11 @@ chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
 });
 
 chrome.tabs.onRemoved.addListener(function (tabId) {
+    // A task that is part way through its work carries on - there is no way to
+    // stop it - and would write back what it read before the tab closed. Tab ids
+    // are not reused within a browser session, so remembering the closed one is
+    // enough to keep that write from putting the record back.
+    closedTabs.add(tabId);
     tabTasks.delete(tabId);
     latestResync.delete(tabId);
     navigations.delete(tabId);

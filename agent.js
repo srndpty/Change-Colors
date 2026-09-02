@@ -225,24 +225,53 @@
     // changed), and single elements to re-check.
     const pendingRoots = new Set();
     const pendingElements = new Set();
-    // Walks left unfinished by a flush that ran out of budget.
+    // Walks left unfinished by a flush that ran out of budget, and the roots
+    // they belong to: a root already being walked is not queued a second time.
+    // A page that keeps changing a class on a big container would otherwise
+    // stack up a full walk of that container per change, faster than they can
+    // be worked off.
     const walks = [];
+    const walking = new Map();
     let timer = null;
 
-    function makeWalk(root) {
-        return {
+    function queueWalk(root) {
+        const already = walking.get(root);
+        if (already) {
+            // Something in it changed while it was being walked; go round once
+            // more when this pass is done, however many changes there were.
+            already.again = true;
+            return;
+        }
+        const walk = {
             root: root,
             walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT),
-            started: false
+            started: false,
+            again: false
         };
+        walking.set(root, walk);
+        walks.push(walk);
+    }
+
+    function finishWalk(walk) {
+        walks.shift();
+        if (walk.again && walk.root.isConnected !== false) {
+            walk.walker = document.createTreeWalker(walk.root, NodeFilter.SHOW_ELEMENT);
+            walk.started = false;
+            walk.again = false;
+            walks.push(walk);
+            return;
+        }
+        walking.delete(walk.root);
     }
 
     /**
-     * Measures and styles what is pending, up to MAX_PER_FLUSH elements. A
-     * bigger subtree than that is not dropped: the walk is kept where it
-     * stopped and continued in the next flush, which is what keeps the deep
-     * DOM of a site like YouTube or Twitch measured all the way down instead of
-     * only for its first few thousand elements.
+     * Measures and styles what is pending, up to MAX_PER_FLUSH elements -
+     * counting the elements a page restyled one by one, not only the ones
+     * walked. Nothing is dropped for being over the limit: unfinished walks
+     * keep their place and the rest of the elements keep theirs, and the next
+     * flush follows straight after. That is what keeps the deep DOM of a site
+     * like YouTube or Twitch measured all the way down without a busy page
+     * being able to hand the agent unbounded work in one go.
      */
     function flush() {
         timer = null;
@@ -254,29 +283,38 @@
             budget--;
             if (element.shadowRoot) {
                 adopt(element.shadowRoot);
-                walks.push(makeWalk(element.shadowRoot));
+                queueWalk(element.shadowRoot);
             }
             if (measuring) {
                 want(element, batch, seen);
             }
         }
 
+        const later = [];
         pendingElements.forEach(function (element) {
+            if (budget <= 0) {
+                later.push(element);
+                return;
+            }
+            budget--;
             // Checked here as well, because a component can attach its shadow
             // root long after the rescans below have stopped.
             if (element.shadowRoot && !observedRoots.has(element.shadowRoot)) {
                 adopt(element.shadowRoot);
-                walks.push(makeWalk(element.shadowRoot));
+                queueWalk(element.shadowRoot);
             }
             if (measuring) {
                 want(element, batch, seen);
             }
         });
         pendingElements.clear();
+        for (const element of later) {
+            pendingElements.add(element);
+        }
 
         pendingRoots.forEach(function (root) {
             if (root.isConnected !== false) {
-                walks.push(makeWalk(root));
+                queueWalk(root);
             }
         });
         pendingRoots.clear();
@@ -294,13 +332,13 @@
                 handle(node);
             }
             if (budget > 0) {
-                walks.shift();
+                finishWalk(walk);
             }
         }
 
         measure(batch);
 
-        if (walks.length) {
+        if (walks.length || pendingElements.size) {
             timer = setTimeout(flush, CONTINUE_DELAY);
         }
     }
@@ -427,6 +465,10 @@
             document.removeEventListener('DOMContentLoaded', start);
             delayed.forEach(clearTimeout);
             delayed.length = 0;
+            walks.length = 0;
+            walking.clear();
+            pendingRoots.clear();
+            pendingElements.clear();
             observedRoots.clear();
             if (timer !== null) {
                 clearTimeout(timer);
