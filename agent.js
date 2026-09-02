@@ -235,7 +235,24 @@
     // The high water marks of what a flush takes on, kept where the work happens
     // rather than sampled from outside: a flush runs to completion, so nothing
     // outside can see the middle of one.
-    const stats = {maxWalks: 0, maxRootsTaken: 0, maxElementsTaken: 0};
+    //
+    // `seen` counts what the draining loops looked at, which is what says the
+    // waiting is left where it waits: taking six thousand elements out of a
+    // million costs the same as taking six thousand out of six thousand only if
+    // the other nine hundred and ninety four thousand are never touched.
+    const stats = {
+        maxWalks: 0,
+        maxRootsFromPending: 0,
+        maxRootsSeen: 0,
+        maxElementsTaken: 0,
+        maxElementsSeen: 0
+    };
+
+    function resetStats() {
+        for (const key of Object.keys(stats)) {
+            stats[key] = 0;
+        }
+    }
 
     // Walks left unfinished by a flush that ran out of budget, and the roots
     // they belong to: a root already being walked is not queued a second time.
@@ -322,7 +339,9 @@
         // is the work being avoided. Copying the remainder out and back would
         // be the cost this is meant to bound.
         let elementsTaken = 0;
+        let elementsSeen = 0;
         for (const element of pendingElements) {
+            elementsSeen++;
             if (budget <= 0) {
                 break;
             }
@@ -340,6 +359,7 @@
             }
         }
         stats.maxElementsTaken = Math.max(stats.maxElementsTaken, elementsTaken);
+        stats.maxElementsSeen = Math.max(stats.maxElementsSeen, elementsSeen);
 
         // Taking a root on costs a tree walker and a place in the queue, so this
         // is bounded like everything else: a page that adds thousands of
@@ -348,7 +368,9 @@
         // at them at all is the work being avoided.
         let intake = MAX_ROOTS_PER_FLUSH;
         let rootsTaken = 0;
+        let rootsSeen = 0;
         for (const root of pendingRoots) {
+            rootsSeen++;
             if (intake <= 0 || budget <= 0 || walks.length >= MAX_QUEUED_WALKS) {
                 break;
             }
@@ -360,7 +382,8 @@
                 queueWalk(root);
             }
         }
-        stats.maxRootsTaken = Math.max(stats.maxRootsTaken, rootsTaken);
+        stats.maxRootsFromPending = Math.max(stats.maxRootsFromPending, rootsTaken);
+        stats.maxRootsSeen = Math.max(stats.maxRootsSeen, rootsSeen);
 
         while (walks.length && budget > 0) {
             const walk = walks[0];
@@ -502,24 +525,36 @@
         setCss: setCss,
         rescan: rescan,
         /**
-         * What is still waiting, and the most any one flush has taken on. The
-         * limits are the point of it: nothing outside can watch a flush, which
-         * runs to completion, so the marks are kept as it goes.
+         * What is still waiting, and the most any one flush has taken on or
+         * looked at. The limits are the point of it: nothing outside can watch
+         * a flush, which runs to completion, so the marks are kept as it goes.
+         * `reset` clears them, for asking the same questions of what happens
+         * next.
+         *
+         * `maxRootsFromPending` counts subtrees taken off the waiting list. A
+         * shadow root found while walking goes straight into the queue instead,
+         * which `maxWalks` is what bounds.
          */
-        pending: function () {
-            return {
+        pending: function (reset) {
+            const answer = {
                 roots: pendingRoots.size,
                 elements: pendingElements.size,
                 walks: walks.length,
                 maxWalks: stats.maxWalks,
-                maxRootsTaken: stats.maxRootsTaken,
+                maxRootsFromPending: stats.maxRootsFromPending,
+                maxRootsSeen: stats.maxRootsSeen,
                 maxElementsTaken: stats.maxElementsTaken,
+                maxElementsSeen: stats.maxElementsSeen,
                 limits: {
                     perFlush: MAX_PER_FLUSH,
                     queuedWalks: MAX_QUEUED_WALKS,
                     rootsPerFlush: MAX_ROOTS_PER_FLUSH
                 }
             };
+            if (reset) {
+                resetStats();
+            }
+            return answer;
         },
         stop: function () {
             stopped = true;

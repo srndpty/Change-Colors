@@ -218,55 +218,115 @@ try {
 
     /* -------------------------------------------- more at once than a flush */
 
-    // A page can hand the agent an unbounded amount of work in one go: subtrees
-    // to walk, elements to look at again, shadow roots found while walking. What
-    // it takes on in one flush is capped, and so is what waits - a tree walker
-    // for every one of twenty thousand subtrees is not something to be holding
-    // before the first is walked. A flush runs to completion, so the marks are
-    // read from the agent rather than sampled from outside.
+    // A page can hand the agent an unbounded amount of work in one go, in three
+    // shapes: subtrees to walk, elements to look at again, and shadow roots
+    // found while walking. Each is capped, and what is not taken on is left
+    // where it waits rather than copied out and back - which is why what the
+    // draining loops looked at is counted as well as what they took.
+    //
+    // A flush runs to completion, so the marks are read from the agent rather
+    // than sampled from outside.
+    const agentPending = reset => evaluate(sessionId,
+        `JSON.stringify(window.__changeColorsAgent.pending(${reset ? 'true' : 'false'}))`);
+    const idle = async (timeout = 20000) => {
+        const until = Date.now() + timeout;
+        for (;;) {
+            const state = JSON.parse(await agentPending(false));
+            if ((state.roots === 0 && state.elements === 0 && state.walks === 0) ||
+                    Date.now() > until) {
+                return state;
+            }
+            await sleep(100);
+        }
+    };
+
+    await idle();
+    await agentPending(true);
+
     const ROOTS = 20000;
     await evaluate(sessionId, `(() => {
         // Added straight to the body, so each one is a root of its own to
         // anything watching the document rather than one subtree with many
-        // children in it. Every other one is a shadow host, which is the other
-        // way a walk gets queued.
+        // children in it.
         const batch = document.createDocumentFragment();
         for (let i = 0; i < ${ROOTS}; i++) {
             const item = document.createElement('div');
             item.className = 'flood';
-            if (i % 2) {
-                item.attachShadow({mode: 'open'}).innerHTML = '<span>shadow</span>';
-            } else {
-                item.appendChild(document.createElement('span'));
-            }
+            item.appendChild(document.createElement('span'));
             batch.appendChild(item);
         }
         document.body.appendChild(batch);
     })()`);
-    await sleep(6000);
+    const flood = await idle();
 
-    const flood = JSON.parse(await evaluate(sessionId,
-        'JSON.stringify(window.__changeColorsAgent.pending())'));
-    check('no flush takes on more subtrees than it is allowed',
-        flood.maxRootsTaken <= flood.limits.rootsPerFlush, true);
-    check('and it did take some on', flood.maxRootsTaken > 0, true);
-    check('no more walks are ever waiting than the queue allows',
-        flood.maxWalks <= flood.limits.queuedWalks, true);
-    check('and the queue really was pushed against that limit',
-        flood.maxWalks > flood.limits.queuedWalks / 2, true);
-    check('no flush takes on more elements than it is allowed',
-        flood.maxElementsTaken <= flood.limits.perFlush, true);
+    check('no flush takes more subtrees off the waiting list than it may',
+        flood.maxRootsFromPending <= flood.limits.rootsPerFlush, true);
+    check('and it took the most it may', flood.maxRootsFromPending,
+        flood.limits.rootsPerFlush);
+    check('the ones it left are left where they wait, not looked at',
+        flood.maxRootsSeen <= flood.limits.rootsPerFlush + 1, true);
     check('all of it is measured in the end', await evaluate(sessionId,
         `document.querySelectorAll('div.flood[data-changecolors-clear]').length`), ROOTS);
-    check('the shadow trees among it are styled too', await evaluate(sessionId, `(() => {
-        const hosts = [...document.querySelectorAll('div.flood')].filter(el => el.shadowRoot);
-        return hosts.filter(el => getComputedStyle(el.shadowRoot.querySelector('span')).color
-            === 'rgb(232, 232, 232)').length;
-    })()`), ROOTS / 2);
-    check('and nothing is left waiting',
-        `${flood.roots}/${flood.elements}/${flood.walks}`, '0/0/0');
+
+    /* ------------------------------------------ a flood of elements to recheck */
+
+    // Restyling what is already there is the other way in: every one of these is
+    // an element to look at again, not a subtree to walk.
+    await agentPending(true);
+    await evaluate(sessionId, `(() => {
+        document.querySelectorAll('div.flood').forEach((el, i) => {
+            el.style.backgroundColor = i % 2 ? '#123456' : '#654321';
+        });
+    })()`);
+    const restyled = await idle();
+
+    check('no flush takes on more elements than it may',
+        restyled.maxElementsTaken <= restyled.limits.perFlush, true);
+    check('and it took the most it may', restyled.maxElementsTaken,
+        restyled.limits.perFlush);
+    check('the ones it left are left where they wait, not looked at',
+        restyled.maxElementsSeen <= restyled.limits.perFlush + 1, true);
+    // Each of them now has a background of its own, so none of them is cleared.
+    check('and every one of them is measured again in the end', await evaluate(sessionId,
+        `document.querySelectorAll('div.flood:not([data-changecolors-clear])').length`),
+        ROOTS);
     await evaluate(sessionId,
         `document.querySelectorAll('div.flood').forEach(el => el.remove())`);
+    await idle();
+
+    /* --------------------------------------- a flood of shadow roots in one go */
+
+    // Shadow roots found while walking do not come off the waiting list at all;
+    // they go straight into the queue. One subtree holding more of them than the
+    // queue may hold is what says the limit is kept where they are queued.
+    const HOSTS = 6000;
+    await agentPending(true);
+    await evaluate(sessionId, `(() => {
+        const host = document.createElement('div');
+        host.id = 'hosts';
+        for (let i = 0; i < ${HOSTS}; i++) {
+            const item = document.createElement('div');
+            item.className = 'host';
+            item.attachShadow({mode: 'open'}).innerHTML = '<span>shadow</span>';
+            host.appendChild(item);
+        }
+        document.body.appendChild(host);
+    })()`);
+    const hosts = await idle();
+
+    check('the queue of subtrees never grows past what it may hold',
+        hosts.maxWalks <= hosts.limits.queuedWalks, true);
+    check('and it really was pushed that far',
+        hosts.maxWalks, hosts.limits.queuedWalks);
+    check('every shadow tree in it is styled', await evaluate(sessionId, `(() => {
+        const all = [...document.querySelectorAll('#hosts .host')];
+        return all.filter(el => getComputedStyle(el.shadowRoot.querySelector('span')).color
+            === 'rgb(232, 232, 232)').length;
+    })()`), HOSTS);
+    check('and nothing is left waiting',
+        `${hosts.roots}/${hosts.elements}/${hosts.walks}`, '0/0/0');
+    await evaluate(sessionId, `document.getElementById('hosts').remove()`);
+    await idle();
 
     /* ----------------------------------------------------------- shadow DOM */
 
