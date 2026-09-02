@@ -49,46 +49,58 @@ Serving on http://localhost:${PORT}/
 
   1. Load this folder as an unpacked extension (chrome://extensions, developer
      mode on), in an ordinary window. Do not open DevTools on the pages: that
-     turns prerendering off.
+     turns prerendering off, and nothing will be prerendered at all.
 
   2. Open http://localhost:${PORT}/prerendered once, and in the extension's
      popup choose "No global override on this page" so this URL is excluded.
-     Turn the override on for everything else ("Apply override on all pages").
+     Then "Apply override on all pages" for everything else.
 
   3. On chrome://extensions, click "Service Worker" under Change Colors to open
-     its console, and paste:
+     its console. Everything below is pasted there.
 
-     self.__commits = [];
-     chrome.webNavigation.onCommitted.addListener(d => self.__commits.push(
-         {url: d.url, frameId: d.frameId, frameType: d.frameType,
-          lifecycle: d.documentLifecycle, documentId: d.documentId}));
+     The extension's own record of the tab is what this reads, because it is in
+     chrome.storage.session and survives the service worker being stopped and
+     started again - which it will be, while you are switching windows. Start
+     from a clean one:
 
-  4. In the window, go to http://localhost:${PORT}/speculate and wait a few
-     seconds. It should be styled.
+     await chrome.storage.session.clear()
+
+  4. In the browser window, go to http://localhost:${PORT}/speculate and wait a
+     few seconds. It should be styled.
 
   5. Back in the service worker console:
 
-     copy(JSON.stringify(self.__commits, null, 1))
-
-     A line with "lifecycle": "prerender" means the browser prerendered the
-     page. If there is none, the browser decided not to - try clicking the link
-     once first, then going Back and repeating, or check that Preloading is on
-     in chrome://settings/performance.
-
-  6. With that document's id from step 5, ask what the extension made of it:
-
      const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+     const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
+     const onScreen = frames.find(f => f.frameId === 0).documentId;
+     const live = new Set(frames.map(f => f.documentId));
      const key = 'injected:' + tab.id;
      const record = (await chrome.storage.session.get(key))[key];
-     record.pages['<the prerendered documentId>'];
+     ({
+         onScreen,
+         filedUnder: record.pages,
+         notOnScreen: Object.entries(record.pages).filter(([id]) => !live.has(id))
+     })
 
-     It must be that same documentId - the prerendered page is a page of its
-     own. If it comes back as the id of the page on screen, the prerendered page
-     was read as a sub frame of it and given its styling, which is the bug this
-     checks for.
+     \`notOnScreen\` is the documents of this tab that are not part of the page
+     you are looking at. Since the record was cleared in step 3 and you have not
+     gone Back, they can only be the page the browser prerendered.
 
-  7. Click through to the prerendered page. It must still be white, sub frame
-     included, and the popup must show the override as off for it.
+       - empty: the browser did not prerender anything. Try clicking the link
+         once, going Back, and repeating from step 3; or check that preloading
+         is on in chrome://settings/performance.
+
+       - an entry whose value is its own id, e.g. ["ABC…", "ABC…"]: correct. The
+         prerendered page was filed as a page of its own, and got its own
+         decision - the exclusion you set in step 2.
+
+       - an entry whose value is the id in \`onScreen\`: the bug. The prerendered
+         page was read as a sub frame of the page you are looking at, and given
+         that page's styling.
+
+  6. Click through to the prerendered page. It must still be white, sub frame
+     included, and the popup must offer to apply the override to it rather than
+     to remove it.
 
 Ctrl+C to stop.
 `);
