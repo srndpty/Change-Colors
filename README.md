@@ -50,7 +50,16 @@ runs on Manifest V3, with the same features and the same settings.
 - A page coming back from the back/forward cache is not a new document: it still
   holds the stylesheet it was left with, possibly from settings that have changed
   since. It is given the difference rather than assumed empty, and what it was
-  left with stays removable.
+  left with stays removable - including when the override was turned off while it
+  was away, which also has to stop the agent it was left running.
+- A restored page brings its sub frames back already loaded. They commit nothing,
+  and `webNavigation.getAllFrames` does not list them, so the record keeps which
+  page each document belonged to: that is the only way left to reach them.
+- Moving to a page the extension does not touch no longer makes it forget the
+  stylesheets it put in the pages behind it. Their text is the only thing that
+  can take them out again, so it is kept until the tab closes.
+- One decision per page. A sub frame applies what the top document decided
+  instead of reading the settings again, which could have moved on since.
 - Settings from version 2.x are only marked as migrated once they have actually
   been read. An offscreen document that could not be created, or that did not
   report in time, used to count as "migration done" and lose the old settings for
@@ -128,11 +137,13 @@ runs on Manifest V3, with the same features and the same settings.
 | `popup.html/.js`     | Toolbar popup: per page, per domain and global override    |
 | `options.html/.js`   | Preferences                                                |
 | `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
+| `common/migration.js`| Carries version 2.x settings over, retried until it works   |
 | `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
 | `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
+| `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
-| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache, bursts of settings changes |
+| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
 | `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
 
 ## Development

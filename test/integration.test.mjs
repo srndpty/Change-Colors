@@ -192,6 +192,16 @@ try {
     const settings = patch => evaluate(workerSession,
         `chrome.storage.local.set(${JSON.stringify(patch)})`);
 
+    // The extension's own view of which document a tab is holding. A document
+    // restored from the back/forward cache keeps the id it had, which is what
+    // lets work recorded for it still apply.
+    const topDocumentId = () => evaluate(workerSession, `(async () => {
+        const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+        const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
+        const top = frames.find(frame => frame.frameId === 0);
+        return top ? top.documentId : null;
+    })()`);
+
     const pageTarget = await findTarget(x => x.type === 'page' && x.url.startsWith('http://localhost'));
     let sessionId = await attach(pageTarget);
     const bg = expression => evaluate(sessionId, `getComputedStyle(${expression}).backgroundColor`);
@@ -308,6 +318,7 @@ try {
     sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
     check('the page to be cached is styled', await bg('document.body'), DARK);
     await evaluate(sessionId, 'window.__cacheMarker = 1');
+    const documentBefore = await topDocumentId();
 
     await evaluate(sessionId, 'location.href = "/plain"');
     await sleep(2000);
@@ -318,15 +329,82 @@ try {
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
     sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
-    console.log('      (the document came back ' +
-        (await evaluate(sessionId, 'window.__cacheMarker === 1') ?
-            'from the back/forward cache)' : 'freshly loaded, not from the cache)'));
+    // Everything below is about a *restored* document. A browser that reloaded
+    // the page instead would pass the colour checks without ever exercising
+    // that path, so this is asserted rather than reported.
+    check('the document really came back from the back/forward cache',
+        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
+    check('and came back as the same document',
+        await topDocumentId(), documentBefore);
     check('a document coming back gets the colors chosen while it was away',
         await bg('document.body'), 'rgb(34, 51, 68)');
 
     await settings({OverrideAll: false});
     await sleep(2000);
     check('and the stylesheet it was left with is still removable',
+        await bg('document.body'), WHITE);
+
+    /* ------------------ back into a restored document with the override off */
+
+    // Turning the override off while a page sits in the cache has to reach that
+    // page when it comes back: the stylesheet in it, the one in its sub frame,
+    // and the agent it was left running, which is what styles its shadow trees.
+    const shadowColor = () => evaluate(sessionId,
+        'getComputedStyle(document.getElementById("widget").shadowRoot' +
+        '.getElementById("shadowText")).color');
+
+    await settings({OverrideAll: true, background_color: '080808'});
+    await sleep(1500);
+    await evaluate(sessionId, 'location.href = "/?agent"');
+    await sleep(3000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('agent')));
+    check('the page about to be cached is styled', await bg('document.body'), DARK);
+    check('its sub frame is styled', await frameBodyBg(), DARK);
+    check('its shadow tree is styled', await shadowColor(), TEXT);
+    await evaluate(sessionId, 'window.__cacheMarker = 1');
+
+    await evaluate(sessionId, 'location.href = "/plain"');
+    await sleep(2000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
+    await settings({OverrideAll: false});
+    await sleep(1500);
+    await evaluate(sessionId, 'history.back()');
+    await sleep(3000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('agent')));
+    check('the document with the sub frame came back from the cache',
+        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
+    check('a restored document loses the stylesheet it was left with',
+        await bg('document.body'), WHITE);
+    check('its sub frame loses its stylesheet too', await frameBodyBg(), WHITE);
+    check('and its shadow tree goes back to the site colors',
+        await shadowColor(), 'rgb(15, 15, 15)');
+
+    /* ------------- a page the extension does not touch, and back to a cached one */
+
+    // Moving to a page the extension leaves alone must not make it forget the
+    // stylesheets it put in the pages behind it. Their text is the only thing
+    // that can take them out again.
+    await settings({OverrideAll: true, background_color: '080808'});
+    await sleep(1500);
+    await evaluate(sessionId, 'location.href = "/?ignored"');
+    await sleep(3000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('ignored')));
+    check('the page behind the untouched one is styled', await bg('document.body'), DARK);
+    await evaluate(sessionId, 'window.__cacheMarker = 1');
+
+    await evaluate(sessionId, 'location.href = "about:blank"');
+    await sleep(2500);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url === 'about:blank'));
+    await settings({background_color: '445566'});
+    await sleep(1500);
+    await evaluate(sessionId, 'history.back()');
+    await sleep(3000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('ignored')));
+    check('the document behind the untouched page came back from the cache',
+        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
+    await settings({OverrideAll: false});
+    await sleep(2000);
+    check('and the stylesheet it was left with survived the detour, and comes out',
         await bg('document.body'), WHITE);
 } catch (e) {
     console.log('FAIL  integration run -> ' + e);

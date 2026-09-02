@@ -35,6 +35,7 @@ import {
     toggleListEntry
 } from './common/settings.js';
 import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
+import {migrateLegacySettings} from './common/migration.js';
 
 const ICON_ON = 'icons/colors_icons.png';
 const ICON_OFF = 'icons/colors_icons_grey.png';
@@ -113,10 +114,14 @@ function queueSync(tabId, url, fresh) {
 /**
  * What is known about a tab:
  *
- *   desired    the stylesheet the page should have. Written as soon as a
- *              document commits, before anything is injected, because a sub
- *              frame commits while the top frame's injection is still running
- *              and has to read this navigation's answer, not the last page's.
+ *   desired    what the page should have: its stylesheet, the stylesheet for
+ *              its shadow trees, and whether the agent has to measure. Written
+ *              as soon as a document commits, before anything is injected,
+ *              because a sub frame commits while the top frame's injection is
+ *              still running and has to read this navigation's answer, not the
+ *              last page's. It is the one decision for the page: a sub frame
+ *              applies it rather than deciding again from the settings, which
+ *              may have moved on since.
  *   documents  documentId -> the stylesheets believed to be in that document,
  *              as indices into `sheets`. A stylesheet is added only by an
  *              insertCSS that succeeded and taken away only by a removeCSS that
@@ -127,6 +132,11 @@ function queueSync(tabId, url, fresh) {
  *              have them. The text is the only thing that can remove a
  *              stylesheet, and it is a few kilobytes, so documents refer to it
  *              rather than repeat it.
+ *   pages      documentId -> the id of the top level document it belongs to,
+ *              and `top`, the page the tab is on. A page restored from the
+ *              back/forward cache brings its sub frames back already loaded:
+ *              they commit nothing, and `webNavigation.getAllFrames` does not
+ *              list them either, so this is the only way left to reach them.
  *
  * A document the browser no longer lists is not necessarily gone: the
  * back/forward cache holds whole documents, stylesheet and all, and hands them
@@ -140,18 +150,44 @@ function injectedKey(tabId) {
     return INJECTED_PREFIX + tabId;
 }
 
+/** What a page gets when nothing is meant to be applied to it. */
+const NOTHING = {css: null, shadowCss: null, probe: false};
+
 async function getRecord(tabId) {
     const stored = await chrome.storage.session.get(injectedKey(tabId));
     const value = stored[injectedKey(tabId)];
     return {
         desired: (value && value.desired) || null,
         documents: (value && value.documents) || {},
-        sheets: (value && value.sheets) || []
+        sheets: (value && value.sheets) || [],
+        pages: (value && value.pages) || {},
+        top: (value && value.top) || null
     };
+}
+
+/**
+ * The decision recorded for a page. A page with no record, or one whose record
+ * says nothing is wanted, are the same thing to a document: take the stylesheet
+ * out and stop the agent.
+ */
+function decisionOf(record) {
+    return record.desired || NOTHING;
+}
+
+/** The documents recorded as belonging to a page, that page's own aside. */
+function documentsOfPage(record, topDocumentId) {
+    return Object.keys(record.documents).filter(function (id) {
+        return id !== topDocumentId && record.pages[id] === topDocumentId;
+    });
 }
 
 /** Drops the text of stylesheets no document refers to any more. */
 function compact(record) {
+    for (const id of Object.keys(record.pages)) {
+        if (!record.documents[id]) {
+            delete record.pages[id];
+        }
+    }
     const sheets = [];
     const moved = new Map();
     for (const id of Object.keys(record.documents)) {
@@ -167,7 +203,7 @@ function compact(record) {
 
 function saveRecord(tabId, record) {
     compact(record);
-    if (!record.desired && !Object.keys(record.documents).length) {
+    if (!decisionOf(record).css && !Object.keys(record.documents).length) {
         return chrome.storage.session.remove(injectedKey(tabId));
     }
     return chrome.storage.session.set({[injectedKey(tabId)]: record});
@@ -306,6 +342,20 @@ async function startAgent(tabId, documentId, shadowCss, probe) {
     }
 }
 
+/**
+ * Puts the document's agent in the state the decision calls for. Stopping is
+ * not only for a document that had one: a document restored from the
+ * back/forward cache comes back with the agent it was left running, and with
+ * the tags that agent put on the page.
+ */
+async function applyAgent(tabId, documentId, decision) {
+    if (decision.shadowCss !== null) {
+        await startAgent(tabId, documentId, decision.shadowCss, decision.probe);
+    } else {
+        await stopAgent(tabId, documentId);
+    }
+}
+
 async function stopAgent(tabId, documentId) {
     try {
         await chrome.scripting.executeScript({
@@ -348,8 +398,16 @@ async function wantedFor(url) {
     };
 }
 
+/**
+ * The tab is on a page the extension does not touch. Only the decision is
+ * dropped: the documents already recorded may still be sitting in the
+ * back/forward cache with a stylesheet in them, and this record holds the only
+ * copy of the text that can remove it. They go when the tab does.
+ */
 async function clearTab(tabId) {
-    await saveRecord(tabId, {desired: null, documents: {}});
+    const record = await getRecord(tabId);
+    record.desired = null;
+    await saveRecord(tabId, record);
     await setIcon(tabId, false);
 }
 
@@ -373,13 +431,25 @@ async function syncTab(tabId, url, fresh) {
         const record = await getRecord(tabId);
         // Recorded before anything is injected, so a sub frame committing while
         // the agent is still being injected reads this navigation's answer.
-        record.desired = wanted.css;
+        record.desired = wanted.css ? wanted : null;
         await saveRecord(tabId, record);
+        record.top = fresh.documentId;
+        record.pages[fresh.documentId] = fresh.documentId;
         await syncDocument(tabId, fresh.documentId, wanted.css, record);
-        forgetDeadDocuments(record, new Set([fresh.documentId]));
+        // A page restored from the back/forward cache brings its sub frames
+        // back with it, already loaded. They commit nothing, and the frame tree
+        // does not list them, so the record of which documents belonged to this
+        // page is the only way left to reach them. A page that has just loaded
+        // has none of these: its sub frames commit later, and are handled then.
+        const others = documentsOfPage(record, fresh.documentId);
+        for (const documentId of others) {
+            await syncDocument(tabId, documentId, wanted.css, record);
+        }
+        forgetDeadDocuments(record, new Set([fresh.documentId].concat(others)));
         await saveRecord(tabId, record);
-        if (wanted.shadowCss !== null) {
-            await startAgent(tabId, fresh.documentId, wanted.shadowCss, wanted.probe);
+        await applyAgent(tabId, fresh.documentId, wanted);
+        for (const documentId of others) {
+            await applyAgent(tabId, documentId, wanted);
         }
         return;
     }
@@ -405,10 +475,14 @@ async function syncTab(tabId, url, fresh) {
     await setIcon(tabId, Boolean(wanted.css));
 
     const record = await getRecord(tabId);
-    record.desired = wanted.css;
+    record.desired = wanted.css ? wanted : null;
     const live = new Set();
+    record.top = top ? top.documentId : record.top;
     for (const frame of frames) {
         live.add(frame.documentId);
+        if (record.top) {
+            record.pages[frame.documentId] = record.top;
+        }
         // Sub frames follow the decision taken for the page they belong to.
         await syncDocument(tabId, frame.documentId, wanted.css, record);
     }
@@ -416,11 +490,7 @@ async function syncTab(tabId, url, fresh) {
     await saveRecord(tabId, record);
 
     for (const frame of frames) {
-        if (wanted.shadowCss !== null) {
-            await startAgent(tabId, frame.documentId, wanted.shadowCss, wanted.probe);
-        } else {
-            await stopAgent(tabId, frame.documentId);
-        }
+        await applyAgent(tabId, frame.documentId, wanted);
     }
 }
 
@@ -466,17 +536,17 @@ chrome.webNavigation.onCommitted.addListener(function (details) {
         if (navigationOf(details.tabId) !== navigation) {
             return;
         }
+        // Whatever the page decided, including that it wants nothing: a sub
+        // frame restored from the back/forward cache still holds the stylesheet
+        // and the agent it was left with, and both have to go.
         const record = await getRecord(details.tabId);
-        if (!record.desired) {
-            return;
+        const decision = decisionOf(record);
+        if (record.top) {
+            record.pages[details.documentId] = record.top;
         }
-        await syncDocument(details.tabId, details.documentId, record.desired, record);
+        await syncDocument(details.tabId, details.documentId, decision.css, record);
         await saveRecord(details.tabId, record);
-        const settings = await getSettings();
-        if (needsPageAgent(settings)) {
-            await startAgent(details.tabId, details.documentId,
-                buildShadowCss(settings), needsBackgroundProbe(settings));
-        }
+        await applyAgent(details.tabId, details.documentId, decision);
     });
 });
 
@@ -542,79 +612,3 @@ chrome.runtime.onStartup.addListener(async function () {
     await migrateLegacySettings();
     await syncAllTabs();
 });
-
-/** Resolves with the settings the offscreen document reports, or null. */
-function waitForLegacySettings(timeoutMs) {
-    return new Promise(function (resolve) {
-        function stop(value) {
-            clearTimeout(timer);
-            chrome.runtime.onMessage.removeListener(listener);
-            resolve(value);
-        }
-        function listener(request) {
-            if (request && request.action === 'legacySettings') {
-                stop(request.data);
-            }
-        }
-        const timer = setTimeout(function () {
-            stop(null);
-        }, timeoutMs);
-        chrome.runtime.onMessage.addListener(listener);
-    });
-}
-
-/**
- * The Manifest V2 version kept its settings in the background page's
- * localStorage, which a service worker cannot read. An offscreen document can,
- * so it is used once to copy the old values over to chrome.storage.local.
- *
- * "Once" means once it has worked. The document reports what it found - an
- * empty object if there was nothing - so a report and a failure to get one are
- * different things, and only a report ends the migration. A creation that
- * failed, an offscreen document already in use, or a report that never came
- * leaves it to be tried again on the next browser start; marking it done there
- * would throw away the settings of everyone it happened to.
- */
-let migrating = null;
-
-function migrateLegacySettings() {
-    if (!migrating) {
-        migrating = runMigration().finally(function () {
-            migrating = null;
-        });
-    }
-    return migrating;
-}
-
-async function runMigration() {
-    const flag = await chrome.storage.local.get({legacyMigrationDone: false});
-    if (flag.legacyMigrationDone) {
-        return;
-    }
-    let legacy = null;
-    try {
-        // The document reports back on its own as soon as it runs, so there is
-        // no window in which a message could be sent before it listens.
-        const reported = waitForLegacySettings(5000);
-        await chrome.offscreen.createDocument({
-            url: 'offscreen.html',
-            reasons: ['LOCAL_STORAGE'],
-            justification: 'Read settings saved by the previous Manifest V2 version.'
-        });
-        legacy = await reported;
-    } catch (e) {
-        // No offscreen support, or the document already exists.
-    } finally {
-        try {
-            await chrome.offscreen.closeDocument();
-        } catch (e) {
-            // Never opened.
-        }
-    }
-
-    if (legacy === null || typeof legacy !== 'object') {
-        // Nothing was read. Leave the flag alone and try again another time.
-        return;
-    }
-    await chrome.storage.local.set(Object.assign({legacyMigrationDone: true}, legacy));
-}
