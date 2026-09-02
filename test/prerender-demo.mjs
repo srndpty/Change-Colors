@@ -68,9 +68,13 @@ Serving on http://localhost:${PORT}/
   4. In the browser window, go to http://localhost:${PORT}/speculate and wait a
      few seconds. It should be styled.
 
-  5. Back in the service worker console:
+  5. Back in the service worker console. The tab is looked up by url, not by
+     "the current window": a service worker is in no window, so Chrome answers
+     that with the window that was focused last - which is the one you are
+     typing this into.
 
-     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+     const tabs = await chrome.tabs.query({url: 'http://localhost:${PORT}/*'});
+     const tab = tabs.find(t => t.url.includes('speculate')) || tabs[0];
      const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
      const onScreen = frames.find(f => f.frameId === 0).documentId;
      const live = new Set(frames.map(f => f.documentId));
@@ -78,8 +82,10 @@ Serving on http://localhost:${PORT}/
      const record = (await chrome.storage.session.get(key))[key];
      ({
          onScreen,
-         filedUnder: record.pages,
-         notOnScreen: Object.entries(record.pages).filter(([id]) => !live.has(id))
+         filedUnder: record && record.pages,
+         notOnScreen: record
+             ? Object.entries(record.pages).filter(([id]) => !live.has(id))
+             : 'nothing recorded for this tab - is the override on?'
      })
 
      \`notOnScreen\` is the documents of this tab that are not part of the page
