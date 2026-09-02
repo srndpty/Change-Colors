@@ -392,6 +392,10 @@
     });
 
     function start() {
+        if (stopped) {
+            // Stopped before the document was ready enough to start on.
+            return;
+        }
         rescan();
         observer.observe(document.documentElement, OBSERVED);
         // Shadow roots are often attached, and backgrounds often applied, after
@@ -420,6 +424,7 @@
             stopped = true;
             observer.disconnect();
             window.removeEventListener('load', rescan);
+            document.removeEventListener('DOMContentLoaded', start);
             delayed.forEach(clearTimeout);
             delayed.length = 0;
             observedRoots.clear();

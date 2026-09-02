@@ -31,18 +31,31 @@ runs on Manifest V3, with the same features and the same settings.
   Bursts of settings changes are coalesced to the last one, and a sub frame is
   styled behind its parent's task, so it can no longer pick up the stylesheet of
   the page it replaced.
-- Work is tied to the document it was decided for, not to the frame: a frame
-  keeps its id when it navigates, so a stylesheet meant for one page could land
-  in the page that replaced it. A freshly committed document is now named by its
-  `documentId`, work queued for a page the tab has since left is dropped, and a
-  resync re-reads the tab's current URL before deciding - a redirect into a page
-  the user excluded no longer inherits the styling of the page it replaced.
-- The service worker keeps what a tab *should* have separate from what it is
-  known to *have*. Only a successful `insertCSS` records a stylesheet as applied
-  and only a successful `removeCSS` takes it off that list, so an injection that
-  failed is retried instead of being remembered as done, and a stylesheet that
-  refused to come out stays tracked until it does - `removeCSS` needs its exact
-  text, and a stylesheet dropped from the list is one nothing can remove again.
+- The unit of work is a document, not a tab and not a frame. A frame keeps its
+  id when it navigates, so a stylesheet meant for one page could land in the page
+  that replaced it - a redirect into a page the user excluded would inherit the
+  styling of the page it replaced. Every injection and every removal now names a
+  `documentId`, so work decided for one document can only ever reach that
+  document. A resync works from the tab's live frames rather than from the URL it
+  was queued with, which can already be a page old.
+- The service worker keeps what a page *should* have separate from what each
+  document is known to *have*. A stylesheet is recorded only by an `insertCSS`
+  that succeeded and taken off only by a `removeCSS` that succeeded, and each
+  call covers exactly one document, so there is no partial success to misread: an
+  injection that failed is retried instead of being remembered as done, and a
+  stylesheet that refused to come out stays tracked until it does. `removeCSS`
+  needs the exact text, and a stylesheet forgotten while it is still in a page is
+  one nothing can remove again - so the text is kept, once for however many
+  documents share it.
+- A page coming back from the back/forward cache is not a new document: it still
+  holds the stylesheet it was left with, possibly from settings that have changed
+  since. It is given the difference rather than assumed empty, and what it was
+  left with stays removable.
+- Settings from version 2.x are only marked as migrated once they have actually
+  been read. An offscreen document that could not be created, or that did not
+  report in time, used to count as "migration done" and lose the old settings for
+  good; it is now retried on the next browser start. Finding nothing to migrate
+  still counts as done.
 - `agent.js` is injected immediately rather than at `document_idle`, so the
   see-through layers a page stacks over its content are given back early
   instead of after the page settles.
@@ -111,15 +124,15 @@ runs on Manifest V3, with the same features and the same settings.
 | -------------------- | --------------------------------------------------------- |
 | `manifest.json`      | Manifest V3 declaration                                    |
 | `background.js`      | Service worker: decides and injects the styling            |
-| `common/settings.js` | Settings model, override rules, stylesheet generation      |
+| `common/settings.js` | Settings model and override rules                          |
 | `popup.html/.js`     | Toolbar popup: per page, per domain and global override    |
 | `options.html/.js`   | Preferences                                                |
 | `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
 | `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
-| `agent.js`           | Styles shadow trees and tags background images, injected on demand |
+| `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
-| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, bursts of settings changes |
+| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache, bursts of settings changes |
 | `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
 
 ## Development

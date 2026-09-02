@@ -293,6 +293,41 @@ try {
         await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
     check('and its elements too',
         await evaluate(sessionId, 'getComputedStyle(document.getElementById("p")).backgroundColor'), CLEAR);
+
+    /* ------------------------------------------ back into a restored document */
+
+    // A document coming back from the back/forward cache commits again with the
+    // id it already had, and it still holds the stylesheet it was left with. It
+    // is not a new document: what it has to be given is the difference, and
+    // what it was left with has to stay removable - a stylesheet forgotten
+    // while it is still in a page is one nothing can take out again.
+    await settings({OverrideAll: true, NotOverridenPages: [], background_color: '080808'});
+    await sleep(1500);
+    await evaluate(sessionId, 'location.href = "/?cached"');
+    await sleep(2500);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
+    check('the page to be cached is styled', await bg('document.body'), DARK);
+    await evaluate(sessionId, 'window.__cacheMarker = 1');
+
+    await evaluate(sessionId, 'location.href = "/plain"');
+    await sleep(2000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
+    // The colors change while the page sits in the cache.
+    await settings({background_color: '223344'});
+    await sleep(1500);
+    await evaluate(sessionId, 'history.back()');
+    await sleep(3000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
+    console.log('      (the document came back ' +
+        (await evaluate(sessionId, 'window.__cacheMarker === 1') ?
+            'from the back/forward cache)' : 'freshly loaded, not from the cache)'));
+    check('a document coming back gets the colors chosen while it was away',
+        await bg('document.body'), 'rgb(34, 51, 68)');
+
+    await settings({OverrideAll: false});
+    await sleep(2000);
+    check('and the stylesheet it was left with is still removable',
+        await bg('document.body'), WHITE);
 } catch (e) {
     console.log('FAIL  integration run -> ' + e);
     results.push(false);

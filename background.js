@@ -6,18 +6,25 @@
  * the "no flash of the original page" behaviour of the Manifest V2 version
  * without shipping a script into every frame of every site.
  *
- * The service worker is not persistent, so the stylesheet currently injected in
- * a tab is remembered in chrome.storage.session (needed to remove exactly that
- * stylesheet later) rather than in a module variable.
+ * Two things shape the way that is done.
  *
- * Everything that touches a tab goes through one queue per tab. Syncing is a
- * read-modify-write ("which stylesheet is in this tab" -> remove it -> insert
- * the new one -> write it back) driven by four independent event sources, and
- * chrome.scripting.removeCSS only removes a stylesheet whose text is handed
- * back to it exactly: two overlapping syncs would leave a stylesheet in the
- * page that nothing can remove any more. The queue also gives sub frames the
- * ordering they need - a frame commits after its parent, so by the time its
- * task runs the top frame's task has recorded what this document wants.
+ * The unit of work is a document, not a tab and not a frame. A frame keeps its
+ * id when it navigates, so anything aimed at a frame lands in whatever document
+ * the frame holds by the time it arrives - which, after a redirect, is a page
+ * the extension may have decided not to touch at all. Every injection and every
+ * removal names a `documentId`, so work decided for one document can only ever
+ * reach that document; when it is gone, the call simply fails.
+ *
+ * And removing a stylesheet needs the exact text it was inserted with, so the
+ * text of every stylesheet believed to be in a document is kept - in
+ * chrome.storage.session, because the service worker is not persistent - until
+ * a removal for that document has actually succeeded. A stylesheet forgotten
+ * while it is still in a page is one nothing can take out again.
+ *
+ * Everything that touches a tab goes through one queue per tab, which keeps
+ * these read-modify-writes from overlapping and gives sub frames their ordering:
+ * a frame commits after its parent, so by the time its task runs the top frame's
+ * task has recorded what the page wants.
  */
 
 import {
@@ -37,7 +44,7 @@ const INJECTED_PREFIX = 'injected:';
 
 // Tail of the chain of tasks queued for a tab, the sequence number of the
 // newest full resync queued for it, and how many documents its top frame has
-// committed - work queued for a tab that has navigated since is stale.
+// committed - work queued for a page the tab has since left is pointless.
 const tabTasks = new Map();
 const latestResync = new Map();
 const navigations = new Map();
@@ -72,14 +79,16 @@ function runOnTab(tabId, task) {
  * A full resync is coalesced: while one waits its turn a newer one makes it
  * pointless, and dropping it matters because the options page writes to storage
  * on every `input` event - dragging a color picker queues dozens of them.
- * A freshly committed frame is never coalesced; each one has its own document
- * to style.
+ * A freshly committed document is never coalesced; each one has a document of
+ * its own to style.
+ *
+ * The navigation counter only saves pointless work here. What keeps a task from
+ * reaching the wrong page is that it names the documents it works on.
  */
 function queueSync(tabId, url, fresh) {
     const navigation = navigationOf(tabId);
     if (fresh !== undefined) {
         return runOnTab(tabId, function () {
-            // A newer document has committed in the meantime; this one is gone.
             if (navigationOf(tabId) !== navigation) {
                 return undefined;
             }
@@ -88,51 +97,44 @@ function queueSync(tabId, url, fresh) {
     }
     const seq = ++sequence;
     latestResync.set(tabId, seq);
-    return runOnTab(tabId, async function () {
+    return runOnTab(tabId, function () {
         if (latestResync.get(tabId) !== seq) {
             return undefined;
         }
-        // A resync applies to whatever the tab holds when it runs, and the URL
-        // it was queued with can already be a page ago - `chrome.tabs.query`
-        // answers with what the tab held at the time of the query. The override
-        // rules have to be evaluated against the current URL, or a page the
-        // user excluded gets the styling of the page it replaced.
-        let current = url;
-        try {
-            current = (await chrome.tabs.get(tabId)).url;
-        } catch (e) {
-            return undefined;
-        }
-        // And if a document committed while we were asking, that commit brings
-        // a sync of its own.
-        if (navigationOf(tabId) !== navigation || latestResync.get(tabId) !== seq) {
-            return undefined;
-        }
-        return syncTab(tabId, current);
+        // The URL a resync was queued with can be a page ago by the time it
+        // runs, so the tab's live frames are what it works from; `url` is only
+        // a fallback for when they cannot be read.
+        return syncTab(tabId, url);
     });
 }
 
 /* ------------------------------------------------------------ tab plumbing */
 
 /**
- * What a tab is known to be in, kept in chrome.storage.session because the
- * service worker is not persistent:
+ * What is known about a tab:
  *
- *   desired  the stylesheet this document should have. Written as soon as a
- *            document commits, before anything is injected, because a sub frame
- *            commits while the top frame's injection is still running and has
- *            to read this navigation's answer rather than the previous page's.
- *   applied  the stylesheets believed to be in the page. Only a successful
- *            insertCSS adds one and only a successful removeCSS takes one away,
- *            because removeCSS needs the exact text of the stylesheet it is
- *            removing: a stylesheet dropped from this list is one nothing can
- *            take out of the page any more.
+ *   desired    the stylesheet the page should have. Written as soon as a
+ *              document commits, before anything is injected, because a sub
+ *              frame commits while the top frame's injection is still running
+ *              and has to read this navigation's answer, not the last page's.
+ *   documents  documentId -> the stylesheets believed to be in that document,
+ *              as indices into `sheets`. A stylesheet is added only by an
+ *              insertCSS that succeeded and taken away only by a removeCSS that
+ *              succeeded. Each call names one document, so there is no partial
+ *              success to misread: what the list says is what that document
+ *              holds.
+ *   sheets     the text of those stylesheets, held once however many documents
+ *              have them. The text is the only thing that can remove a
+ *              stylesheet, and it is a few kilobytes, so documents refer to it
+ *              rather than repeat it.
  *
- * The two are deliberately not the same value. An insertCSS that failed - a
- * frame that went away mid-flight - would otherwise be recorded as applied and
- * never retried.
+ * A document the browser no longer lists is not necessarily gone: the
+ * back/forward cache holds whole documents, stylesheet and all, and hands them
+ * back on the next Back. Their entries are therefore kept - they cost an index
+ * each - until there are more of them than any tab plausibly has, and only ones
+ * that are not live are ever dropped.
  */
-const MAX_TRACKED = 4;
+const MAX_DOCUMENTS = 50;
 
 function injectedKey(tabId) {
     return INJECTED_PREFIX + tabId;
@@ -143,51 +145,131 @@ async function getRecord(tabId) {
     const value = stored[injectedKey(tabId)];
     return {
         desired: (value && value.desired) || null,
-        applied: (value && value.applied) || []
+        documents: (value && value.documents) || {},
+        sheets: (value && value.sheets) || []
     };
 }
 
+/** Drops the text of stylesheets no document refers to any more. */
+function compact(record) {
+    const sheets = [];
+    const moved = new Map();
+    for (const id of Object.keys(record.documents)) {
+        record.documents[id] = record.documents[id].map(function (index) {
+            if (!moved.has(index)) {
+                moved.set(index, sheets.push(record.sheets[index]) - 1);
+            }
+            return moved.get(index);
+        });
+    }
+    record.sheets = sheets;
+}
+
 function saveRecord(tabId, record) {
-    if (!record.desired && !record.applied.length) {
+    compact(record);
+    if (!record.desired && !Object.keys(record.documents).length) {
         return chrome.storage.session.remove(injectedKey(tabId));
     }
     return chrome.storage.session.set({[injectedKey(tabId)]: record});
 }
 
+function sheetsOf(record, documentId) {
+    return (record.documents[documentId] || []).map(function (index) {
+        return record.sheets[index];
+    });
+}
+
+function indexOfSheet(record, css) {
+    const index = record.sheets.indexOf(css);
+    return index === -1 ? record.sheets.push(css) - 1 : index;
+}
+
 /**
- * A frame keeps its frameId across navigations, so a task that was queued for
- * one document would inject into whatever document the frame holds by the time
- * it runs. `documentId` names the document itself, which is what the injection
- * is really about.
+ * Forgets the oldest documents that are no longer live. A document still listed
+ * by the browser is kept whatever the count: its stylesheets can still be
+ * removed, and only this record knows their text.
  */
-function targetFor(tabId, frame) {
-    if (!frame) {
-        return {tabId: tabId, allFrames: true};
+function forgetDeadDocuments(record, live) {
+    const ids = Object.keys(record.documents);
+    if (ids.length <= MAX_DOCUMENTS) {
+        return;
     }
-    if (frame.documentId) {
-        return {tabId: tabId, documentIds: [frame.documentId]};
+    for (const id of ids) {
+        if (Object.keys(record.documents).length <= MAX_DOCUMENTS) {
+            return;
+        }
+        if (!live || !live.has(id)) {
+            delete record.documents[id];
+        }
     }
-    return {tabId: tabId, frameIds: [frame.frameId]};
 }
 
-/** Resolves true only if the stylesheet is now in the page. */
-async function insertCss(tabId, css, frame) {
+/** The documents the tab is holding right now, top level frame first. */
+async function liveFrames(tabId) {
     try {
-        await chrome.scripting.insertCSS({target: targetFor(tabId, frame), css: css});
+        const frames = await chrome.webNavigation.getAllFrames({tabId: tabId});
+        return (frames || []).filter(function (frame) {
+            return Boolean(frame.documentId);
+        });
+    } catch (e) {
+        return [];
+    }
+}
+
+/** Resolves true only if the stylesheet is now in that document. */
+async function insertCss(tabId, documentId, css) {
+    try {
+        await chrome.scripting.insertCSS({
+            target: {tabId: tabId, documentIds: [documentId]},
+            css: css
+        });
         return true;
     } catch (e) {
-        // The frame or document can be gone already, or be one we may not touch.
+        // The document is gone already, or is one we may not touch.
         return false;
     }
 }
 
-/** Resolves true only if the stylesheet is no longer in the page. */
-async function removeCss(tabId, css) {
+/** Resolves true only if the stylesheet is no longer in that document. */
+async function removeCss(tabId, documentId, css) {
     try {
-        await chrome.scripting.removeCSS({target: {tabId: tabId, allFrames: true}, css: css});
+        await chrome.scripting.removeCSS({
+            target: {tabId: tabId, documentIds: [documentId]},
+            css: css
+        });
         return true;
     } catch (e) {
         return false;
+    }
+}
+
+/**
+ * Brings one document in line with what the page should have, and records what
+ * it ends up holding.
+ *
+ * This is the same work whether the document has just committed, has come back
+ * from the back/forward cache with the stylesheet of an older setting still in
+ * it, or is simply being resynced: what it should have is compared with what it
+ * is known to have.
+ */
+async function syncDocument(tabId, documentId, wantedCss, record) {
+    const present = sheetsOf(record, documentId);
+    const kept = [];
+    for (const css of present) {
+        if (css === wantedCss || !await removeCss(tabId, documentId, css)) {
+            kept.push(css);
+        }
+    }
+    if (wantedCss && !kept.includes(wantedCss) &&
+            await insertCss(tabId, documentId, wantedCss)) {
+        kept.push(wantedCss);
+    }
+    if (kept.length) {
+        record.documents[documentId] = kept.map(function (css) {
+            return indexOfSheet(record, css);
+        });
+    } else {
+        delete record.documents[documentId];
     }
 }
 
@@ -201,8 +283,8 @@ async function removeCss(tabId, css) {
  * layers a page stacks over its content - a headline over a hero banner, the
  * controls over a video - would stay opaque until the page went idle.
  */
-async function startAgent(tabId, shadowCss, probe, frame) {
-    const target = targetFor(tabId, frame);
+async function startAgent(tabId, documentId, shadowCss, probe) {
+    const target = {tabId: tabId, documentIds: [documentId]};
     try {
         await chrome.scripting.executeScript({
             target: target,
@@ -220,14 +302,14 @@ async function startAgent(tabId, shadowCss, probe, frame) {
             }
         });
     } catch (e) {
-        // Frame gone, or a document we may not script.
+        // Document gone, or one we may not script.
     }
 }
 
-async function stopAgent(tabId) {
+async function stopAgent(tabId, documentId) {
     try {
         await chrome.scripting.executeScript({
-            target: {tabId: tabId, allFrames: true},
+            target: {tabId: tabId, documentIds: [documentId]},
             injectImmediately: true,
             func: function () {
                 if (window.__changeColorsAgent) {
@@ -266,72 +348,79 @@ async function wantedFor(url) {
     };
 }
 
+async function clearTab(tabId) {
+    await saveRecord(tabId, {desired: null, documents: {}});
+    await setIcon(tabId, false);
+}
+
 /**
  * Brings a tab in line with the current settings. Runs on the tab's queue, so
  * it has the tab to itself for the whole of its read-modify-write.
  *
  * `fresh` ({frameId, documentId}) is set when a top level document has just
- * committed: the old stylesheet went away with the old document, so the new one
- * only needs injecting - into that document, named by its id, and not into
- * whatever the frame holds by the time this runs.
+ * committed. The work is the same as a resync, but for that document alone:
+ * the frame may already hold another one, and the other frames of the page get
+ * their own commits.
  */
 async function syncTab(tabId, url, fresh) {
-    if (!isSupportedUrl(url)) {
-        await saveRecord(tabId, {desired: null, applied: []});
-        await setIcon(tabId, false);
-        return;
-    }
-
-    const wanted = await wantedFor(url);
-    await setIcon(tabId, Boolean(wanted.css));
-
     if (fresh !== undefined) {
-        // What this document wants is recorded before anything is injected, so
-        // a sub frame committing while the agent is still being injected reads
-        // this navigation's stylesheet rather than the previous page's.
-        //
-        // What was applied to the previous document is kept rather than dropped:
-        // those stylesheets went away with it, so removing them later is a no-op
-        // that costs nothing - but a stylesheet that a task still in flight for
-        // the previous page put into this document stays removable.
-        const previous = await getRecord(tabId);
-        const record = {desired: wanted.css, applied: previous.applied.slice(-MAX_TRACKED)};
-        await saveRecord(tabId, record);
-        if (wanted.css && await insertCss(tabId, wanted.css, fresh)) {
-            if (!record.applied.includes(wanted.css)) {
-                record.applied.push(wanted.css);
-            }
-            await saveRecord(tabId, record);
+        if (!isSupportedUrl(url)) {
+            await clearTab(tabId);
+            return;
         }
+        const wanted = await wantedFor(url);
+        await setIcon(tabId, Boolean(wanted.css));
+        const record = await getRecord(tabId);
+        // Recorded before anything is injected, so a sub frame committing while
+        // the agent is still being injected reads this navigation's answer.
+        record.desired = wanted.css;
+        await saveRecord(tabId, record);
+        await syncDocument(tabId, fresh.documentId, wanted.css, record);
+        forgetDeadDocuments(record, new Set([fresh.documentId]));
+        await saveRecord(tabId, record);
         if (wanted.shadowCss !== null) {
-            await startAgent(tabId, wanted.shadowCss, wanted.probe, fresh);
+            await startAgent(tabId, fresh.documentId, wanted.shadowCss, wanted.probe);
         }
         return;
     }
+
+    const frames = await liveFrames(tabId);
+    const top = frames.find(function (frame) {
+        return frame.frameId === 0;
+    });
+    let currentUrl = top ? top.url : url;
+    if (!top) {
+        try {
+            currentUrl = (await chrome.tabs.get(tabId)).url;
+        } catch (e) {
+            return;
+        }
+    }
+    if (!isSupportedUrl(currentUrl)) {
+        await clearTab(tabId);
+        return;
+    }
+
+    const wanted = await wantedFor(currentUrl);
+    await setIcon(tabId, Boolean(wanted.css));
 
     const record = await getRecord(tabId);
     record.desired = wanted.css;
-    // A stylesheet is dropped from `applied` only once it is really gone: one
-    // that failed to come out stays on the list and is tried again next time,
-    // because removeCSS is the only thing that can remove it and it needs this
-    // exact text.
-    const kept = [];
-    for (const css of record.applied) {
-        if (css === wanted.css || !await removeCss(tabId, css)) {
-            kept.push(css);
-        }
+    const live = new Set();
+    for (const frame of frames) {
+        live.add(frame.documentId);
+        // Sub frames follow the decision taken for the page they belong to.
+        await syncDocument(tabId, frame.documentId, wanted.css, record);
     }
-    record.applied = kept.slice(-MAX_TRACKED);
-    if (wanted.css && !record.applied.includes(wanted.css) &&
-            await insertCss(tabId, wanted.css)) {
-        record.applied.push(wanted.css);
-    }
+    forgetDeadDocuments(record, live);
     await saveRecord(tabId, record);
 
-    if (wanted.shadowCss !== null) {
-        await startAgent(tabId, wanted.shadowCss, wanted.probe);
-    } else {
-        await stopAgent(tabId);
+    for (const frame of frames) {
+        if (wanted.shadowCss !== null) {
+            await startAgent(tabId, frame.documentId, wanted.shadowCss, wanted.probe);
+        } else {
+            await stopAgent(tabId, frame.documentId);
+        }
     }
 }
 
@@ -355,38 +444,38 @@ async function syncActiveTab(tabId) {
  * A frame commits after its parent has, so queueing here - synchronously, in
  * listener order - puts a sub frame behind the top frame's task, and it reads
  * the stylesheet that task recorded.
+ *
+ * A document restored from the back/forward cache commits again with the id it
+ * already had, and `syncDocument()` treats it for what it is: a document that
+ * may still hold the stylesheet of an older setting, to be brought in line
+ * rather than assumed empty.
  */
 chrome.webNavigation.onCommitted.addListener(function (details) {
-    const frame = {frameId: details.frameId, documentId: details.documentId};
     if (details.frameId === 0) {
-        // Recorded before queueing, so anything queued for the document this
-        // one replaces can tell that it is stale.
+        // Recorded before queueing, so work queued for the page this one
+        // replaces can tell that it has nothing left to do.
         noteNavigation(details.tabId);
-        queueSync(details.tabId, details.url, frame);
+        queueSync(details.tabId, details.url, {
+            frameId: details.frameId,
+            documentId: details.documentId
+        });
         return;
     }
     const navigation = navigationOf(details.tabId);
     runOnTab(details.tabId, async function () {
         if (navigationOf(details.tabId) !== navigation) {
-            // The page this frame belongs to is gone.
             return;
         }
-        // Sub frames inherit the decision taken for the top level document.
         const record = await getRecord(details.tabId);
         if (!record.desired) {
             return;
         }
-        if (await insertCss(details.tabId, record.desired, frame) &&
-                !record.applied.includes(record.desired)) {
-            // The top frame's own insert did not get through, but this frame's
-            // did: the stylesheet is in the page and has to stay removable.
-            record.applied = record.applied.concat([record.desired]).slice(-MAX_TRACKED);
-            await saveRecord(details.tabId, record);
-        }
+        await syncDocument(details.tabId, details.documentId, record.desired, record);
+        await saveRecord(details.tabId, record);
         const settings = await getSettings();
         if (needsPageAgent(settings)) {
-            await startAgent(details.tabId, buildShadowCss(settings),
-                needsBackgroundProbe(settings), frame);
+            await startAgent(details.tabId, details.documentId,
+                buildShadowCss(settings), needsBackgroundProbe(settings));
         }
     });
 });
@@ -442,15 +531,16 @@ chrome.commands.onCommand.addListener(async function (command) {
     }
 });
 
-chrome.runtime.onInstalled.addListener(async function (details) {
-    if (details.reason === 'update' || details.reason === 'install') {
-        await migrateLegacySettings();
-    }
+chrome.runtime.onInstalled.addListener(async function () {
+    await migrateLegacySettings();
     await syncAllTabs();
 });
 
-chrome.runtime.onStartup.addListener(function () {
-    syncAllTabs();
+chrome.runtime.onStartup.addListener(async function () {
+    // Migration is retried here: a browser start is the next chance to reach an
+    // offscreen document if the one on update could not be created.
+    await migrateLegacySettings();
+    await syncAllTabs();
 });
 
 /** Resolves with the settings the offscreen document reports, or null. */
@@ -477,8 +567,26 @@ function waitForLegacySettings(timeoutMs) {
  * The Manifest V2 version kept its settings in the background page's
  * localStorage, which a service worker cannot read. An offscreen document can,
  * so it is used once to copy the old values over to chrome.storage.local.
+ *
+ * "Once" means once it has worked. The document reports what it found - an
+ * empty object if there was nothing - so a report and a failure to get one are
+ * different things, and only a report ends the migration. A creation that
+ * failed, an offscreen document already in use, or a report that never came
+ * leaves it to be tried again on the next browser start; marking it done there
+ * would throw away the settings of everyone it happened to.
  */
-async function migrateLegacySettings() {
+let migrating = null;
+
+function migrateLegacySettings() {
+    if (!migrating) {
+        migrating = runMigration().finally(function () {
+            migrating = null;
+        });
+    }
+    return migrating;
+}
+
+async function runMigration() {
     const flag = await chrome.storage.local.get({legacyMigrationDone: false});
     if (flag.legacyMigrationDone) {
         return;
@@ -495,7 +603,7 @@ async function migrateLegacySettings() {
         });
         legacy = await reported;
     } catch (e) {
-        // No offscreen support, or the document already exists - skip migration.
+        // No offscreen support, or the document already exists.
     } finally {
         try {
             await chrome.offscreen.closeDocument();
@@ -504,9 +612,9 @@ async function migrateLegacySettings() {
         }
     }
 
-    const patch = {legacyMigrationDone: true};
-    if (legacy && typeof legacy === 'object') {
-        Object.assign(patch, legacy);
+    if (legacy === null || typeof legacy !== 'object') {
+        // Nothing was read. Leave the flag alone and try again another time.
+        return;
     }
-    await chrome.storage.local.set(patch);
+    await chrome.storage.local.set(Object.assign({legacyMigrationDone: true}, legacy));
 }
