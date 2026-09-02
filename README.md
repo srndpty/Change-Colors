@@ -154,6 +154,7 @@ runs on Manifest V3, with the same features and the same settings.
 | `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
 | `libs/font_detect.js`| Detects which fonts the system has                         |
 | `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
+| `test/prerender-demo.mjs` | Serves the pages for checking prerendering by hand |
 | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
 | `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
 | `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
@@ -181,5 +182,17 @@ affected by machine load:
 ```
 npm run test:perf
 ```
+
+One case cannot be automated. Chrome turns prerendering off for any tab that has
+DevTools attached - it reports `PrerenderingDisabledByDevTools` - and driving a
+browser from a test means attaching to it, so no page is ever prerendered while
+the integration test runs. It says so and skips that case rather than passing
+quietly, and the check is left to be done by hand:
+
+```
+npm run demo:prerender
+```
+
+which serves the two pages and prints the steps.
 
 Set `CHROME` if Chrome is not at the default Windows install path.

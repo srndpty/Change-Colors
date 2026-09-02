@@ -8,6 +8,7 @@
         "test": "node test/migration.test.mjs && node test/css.test.mjs && node test/integration.test.mjs",
         "test:integration": "node test/integration.test.mjs",
         "test:perf": "node test/perf.test.mjs",
-        "test:migration": "node test/migration.test.mjs"
+        "test:migration": "node test/migration.test.mjs",
+        "demo:prerender": "node test/prerender-demo.mjs"
     }
 }

@@ -138,6 +138,10 @@ const chrome = spawn(CHROME, [
 
 let nextId = 0;
 const pending = new Map();
+// What the browser says about pages it was asked to prerender, by url. A page
+// being prerendered is not in the target list and cannot be attached to, so
+// this is the only way to know whether one exists.
+const prerenders = new Map();
 let buffer = Buffer.alloc(0);
 chrome.stdio[4].on('data', chunk => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -146,7 +150,12 @@ chrome.stdio[4].on('data', chunk => {
         const raw = buffer.subarray(0, end).toString();
         buffer = buffer.subarray(end + 1);
         const msg = JSON.parse(raw);
-        if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+        if (msg.id && pending.has(msg.id)) {
+            pending.get(msg.id)(msg);
+            pending.delete(msg.id);
+        } else if (msg.method === 'Preload.prerenderStatusUpdated') {
+            prerenders.set(msg.params.key.url, msg.params.status);
+        }
     }
 });
 function send(method, params = {}, sessionId) {
@@ -452,39 +461,87 @@ try {
 
     // A page being prerendered lives in the same tab as the page on screen, and
     // its own top level frame does not have frame id 0. Read as a sub frame of
-    // the page on screen it would be given that page's decision - here, the
+    // the page on screen, it would be given that page's decision - here, the
     // override that the prerendered URL is excluded from.
+    //
+    // Nothing here attaches to a page: Chrome turns prerendering off for a tab
+    // that has DevTools attached, which is what this test would otherwise be.
+    // The tab is driven through the extension's own APIs, and what is checked is
+    // what the extension made of the prerendered page - the page it filed it
+    // under, which is where the mistake would be.
+    // What the browser tells the extension about the pages in this tab. The same
+    // events the extension itself listens to, so this is evidence a page really
+    // was prerendered rather than an assumption that one was.
+    const watchCommits = () => evaluate(workerSession, `(() => {
+        self.__commits = [];
+        self.__watch = d => self.__commits.push({
+            url: d.url,
+            frameId: d.frameId,
+            frameType: d.frameType,
+            lifecycle: d.documentLifecycle,
+            documentId: d.documentId
+        });
+        chrome.webNavigation.onCommitted.addListener(self.__watch);
+    })()`);
+    const commits = () => evaluate(workerSession, 'JSON.stringify(self.__commits)');
+    const stopWatching = () => evaluate(workerSession,
+        'chrome.webNavigation.onCommitted.removeListener(self.__watch)');
+
+    const stateOfTab = () => evaluate(workerSession, `(async () => {
+        const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+        const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
+        const top = frames.find(frame => frame.frameId === 0);
+        const key = 'injected:' + tab.id;
+        const record = (await chrome.storage.session.get(key))[key] || {pages: {}};
+        return JSON.stringify({
+            onScreenDocument: top ? top.documentId : null,
+            pages: record.pages || {},
+            showing: record.top,
+            decided: Boolean((record.decisions || {})[top && top.documentId])
+        });
+    })()`);
+    const goTo = where => evaluate(workerSession, `(async () => {
+        const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+        await chrome.tabs.update(tab.id, {url: ${JSON.stringify('')} + ${JSON.stringify(where)}});
+    })()`);
+
     await settings({
         OverrideAll: true,
         background_color: '080808',
         NotOverridenPages: [`http://localhost:${PORT}/prerendered`]
     });
-    await sleep(1500);
-    await evaluate(sessionId, 'location.href = "/speculate"');
-    await sleep(2000);
-    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('speculate')));
-    check('the page doing the speculating is styled', await bg('document.body'), DARK);
+    await sleep(1000);
+    await watchCommits();
+    await goTo(`http://localhost:${PORT}/speculate`);
+    await sleep(6000);
 
-    await sleep(4000);
-    const prerender = await findTarget(x => x.type === 'page' && x.url.includes('/prerendered'));
-    if (!prerender) {
-        console.log('SKIP  this browser did not prerender the page, so the ' +
-            'prerendered-page checks were not run.');
+    const seen = JSON.parse(await commits());
+    await stopWatching();
+    const prerenderCommit = seen.find(function (commit) {
+        return commit.lifecycle === 'prerender' && commit.url.includes('/prerendered');
+    });
+
+    if (!prerenderCommit) {
+        console.log('SKIP  this browser did not prerender the page, so what the ' +
+            'extension made of a prerendered page was not checked. Commits seen: ' +
+            JSON.stringify(seen.map(c => c.lifecycle + ' ' + c.frameType + ' ' + c.url.slice(-12))));
     } else {
-        const prerenderSession = await attach(prerender);
-        check('a page being prerendered is not given the styling of the page on screen',
-            await evaluate(prerenderSession,
-                'getComputedStyle(document.body).backgroundColor'), WHITE);
-        check('nor is the sub frame inside it',
-            await evaluate(prerenderSession,
-                "getComputedStyle(document.getElementById('f').contentDocument.body).backgroundColor"),
-            WHITE);
+        console.log('      (the prerendered page committed as frameId ' +
+            prerenderCommit.frameId + ', frameType ' + prerenderCommit.frameType + ')');
+        const state = JSON.parse(await stateOfTab());
+        check('a prerendered page is filed as a page of its own',
+            state.pages[prerenderCommit.documentId], prerenderCommit.documentId);
+        check('not as part of the page on screen',
+            state.pages[prerenderCommit.documentId] === state.onScreenDocument, false);
+        check('and the page on screen is still the one the tab is showing',
+            state.showing, state.onScreenDocument);
+        check('with the decision taken for it', state.decided, true);
     }
 
-    await evaluate(sessionId, 'location.href = "/prerendered"');
+    await goTo(`http://localhost:${PORT}/prerendered`);
     await sleep(3000);
     sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/prerendered')));
-    check('and it is still left alone once it is the page on screen',
+    check('and it is left alone once it is the page on screen',
         await bg('document.body'), WHITE);
     check('sub frame included', await frameBodyBg(), WHITE);
 } catch (e) {
