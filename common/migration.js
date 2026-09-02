@@ -7,7 +7,8 @@
  *
  * "Once" means once it has worked. The document reports what it found - an
  * empty object if there was nothing there - so a report and a failure to get
- * one are different things, and only a report ends the migration. A creation
+ * one are different things, and only a report ends the migration. What comes
+ * across is only what has not been set since. A creation
  * that failed, an offscreen document already in use, or a report that never
  * came leaves it to be tried again on the next browser start; marking it done
  * in those cases would throw away the settings of everyone it happened to.
@@ -80,7 +81,20 @@ async function run(timeoutMs) {
         // Nothing was read. Leave the flag alone and try again another time.
         return;
     }
-    await chrome.storage.local.set(Object.assign({legacyMigrationDone: true}, legacy));
+
+    // Only settings that have never been set here are taken over. A migration
+    // that failed is retried later, and in between the user may well have set
+    // preferences of their own - overwriting those with values from a version
+    // they have replaced would lose settings just as surely as the failure this
+    // retry exists for.
+    const current = await chrome.storage.local.get(null);
+    const patch = {legacyMigrationDone: true};
+    for (const [key, value] of Object.entries(legacy)) {
+        if (!(key in current)) {
+            patch[key] = value;
+        }
+    }
+    await chrome.storage.local.set(patch);
 }
 
 // One migration at a time: onInstalled and onStartup can both reach this, and

@@ -28,6 +28,11 @@ function stubChrome({stored = {}, createFails = false, report = null} = {}) {
         storage: {
             local: {
                 async get(defaults) {
+                    // null asks for everything that is stored, the way the real
+                    // API does.
+                    if (defaults === null || defaults === undefined) {
+                        return Object.assign({}, stored);
+                    }
                     const out = {};
                     for (const [key, value] of Object.entries(defaults)) {
                         out[key] = key in stored ? stored[key] : value;
@@ -111,6 +116,22 @@ env = stubChrome({report: {background_color: 'ffffff'}, stored: {legacyMigration
 await migrateLegacySettings(TIMEOUT);
 check('a migration already done opens no document', env.calls.created, 0);
 check('and does not overwrite current settings', env.stored.background_color, undefined);
+
+/* ------------------- settings written between a failure and its retry win */
+
+// The retry exists so a failed migration does not lose the old settings. It
+// must not lose the new ones instead: anything set here since is what the user
+// chose most recently.
+env = stubChrome({createFails: true, stored: {}});
+await migrateLegacySettings(TIMEOUT);
+const chosen = stubChrome({
+    report: {background_color: '112233', text_color: '445566'},
+    stored: {background_color: 'abcdef'}
+});
+await migrateLegacySettings(TIMEOUT);
+check('a setting chosen since the failure is kept', chosen.stored.background_color, 'abcdef');
+check('one the user never touched still comes across', chosen.stored.text_color, '445566');
+check('and the migration is done', chosen.stored.legacyMigrationDone, true);
 
 /* ------------------------------------------------------ two callers at once */
 

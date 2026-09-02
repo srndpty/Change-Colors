@@ -1,0 +1,2408 @@
+diff --git a/README.md b/README.md
+index 93fc7ea..82fb98d 100644
+--- a/README.md
++++ b/README.md
+@@ -19,8 +19,55 @@ runs on Manifest V3, with the same features and the same settings.
+   update, through an offscreen document.
+ - Styling is applied with `chrome.scripting.insertCSS` while the document
+   commits, instead of by messaging a content script. There is no content script
+-  in the package any more, and the stylesheet lands before the first paint; sub
+-  frames are still covered.
++  in the package any more, and the stylesheet is injected as early as the API
++  allows - in practice before the page has drawn, though nothing guarantees it;
++  sub frames are still covered.
++- Everything the service worker does to a tab is serialized on a queue of its
++  own. Four event sources (navigation, sub frame commits, tab updates and
++  settings changes) all replace a tab's stylesheet, and `removeCSS` only removes
++  a stylesheet handed back to it exactly: two overlapping swaps used to leave a
++  stylesheet in the page that nothing could remove again - dragging a color
++  picker was enough to trigger it, and the page then kept an old color for good.
++  Bursts of settings changes are coalesced to the last one, and a sub frame is
++  styled behind its parent's task, so it can no longer pick up the stylesheet of
++  the page it replaced.
++- The unit of work is a document, not a tab and not a frame. A frame keeps its
++  id when it navigates, so a stylesheet meant for one page could land in the page
++  that replaced it - a redirect into a page the user excluded would inherit the
++  styling of the page it replaced. Every injection and every removal now names a
++  `documentId`, so work decided for one document can only ever reach that
++  document. A resync works from the tab's live frames rather than from the URL it
++  was queued with, which can already be a page old.
++- The service worker keeps what a page *should* have separate from what each
++  document is known to *have*. A stylesheet is recorded only by an `insertCSS`
++  that succeeded and taken off only by a `removeCSS` that succeeded, and each
++  call covers exactly one document, so there is no partial success to misread: an
++  injection that failed is retried instead of being remembered as done, and a
++  stylesheet that refused to come out stays tracked until it does. `removeCSS`
++  needs the exact text, and a stylesheet forgotten while it is still in a page is
++  one nothing can remove again - so the text is kept, once for however many
++  documents share it.
++- A page coming back from the back/forward cache is not a new document: it still
++  holds the stylesheet it was left with, possibly from settings that have changed
++  since. It is given the difference rather than assumed empty, and what it was
++  left with stays removable - including when the override was turned off while it
++  was away, which also has to stop the agent it was left running.
++- A restored page brings its sub frames back already loaded. They commit nothing,
++  and `webNavigation.getAllFrames` does not list them, so the record keeps which
++  page each document belonged to: that is the only way left to reach them.
++- Moving to a page the extension does not touch no longer makes it forget the
++  stylesheets it put in the pages behind it. Their text is the only thing that
++  can take them out again, so it is kept until the tab closes.
++- One decision per page. A sub frame applies what the top document decided
++  instead of reading the settings again, which could have moved on since.
++- Settings from version 2.x are only marked as migrated once they have actually
++  been read. An offscreen document that could not be created, or that did not
++  report in time, used to count as "migration done" and lose the old settings for
++  good; it is now retried on the next browser start. Finding nothing to migrate
++  still counts as done.
++- `agent.js` is injected immediately rather than at `document_idle`, so the
++  see-through layers a page stacks over its content are given back early
++  instead of after the page settles.
+ - Keyboard shortcuts use the `commands` API instead of a key handler injected in
+   every page. The defaults are unchanged (Ctrl+Shift+P / D / G); Chrome may
+   refuse a default that collides with one of its own, in which case set it at
+@@ -36,7 +83,17 @@ runs on Manifest V3, with the same features and the same settings.
+   background, with the extension's rules held off for the length of the
+   measurement, and tags the see-through ones so the stylesheet clears them
+   again. Painting first and clearing afterwards keeps a page readable even
+-  where the agent cannot run.
++  where the agent cannot run. Backgrounds written in a modern color syntax
++  (`oklch()`, `lab()`, `color()`) are read correctly, instead of being taken for
++  transparent and cleared. A document larger than one pass is measured
++  across several passes rather than only down to its first few thousand
++  elements, and a class or custom property changing on an ancestor - a theme
++  switch, a menu opening - remeasures the subtree it can restyle.
++- Fixed: **busy pages such as Twitch became sluggish while the override was
++  active**. Deep `:has()` selector chains made Chrome recalculate styles for
++  most of the document whenever live chat or player controls changed. Media is
++  now guarded without ancestor `:has()` selectors, and the page agent only
++  remeasures the changed element instead of repeatedly walking its subtree.
+ - Fixed: **CSS background images were wiped out**, which turned hero banners
+   into flat dark rectangles. Background images now follow the "Show images?"
+   option, so they are kept by default and only removed when you turn images off.
+@@ -44,7 +101,11 @@ runs on Manifest V3, with the same features and the same settings.
+   the dark background - whole parts of a page (YouTube's sidebar and its filter
+   chips, for example) looked blank. A document stylesheet never crosses a shadow
+   boundary, so `agent.js` now adopts the same rules, rewritten around `:host`,
+-  into every shadow root, nested ones included.
++  into every shadow root, nested ones included, and watches each one for changes
++  of its own. It runs for a font-only or image-hiding override too: those stop
++  at a shadow boundary just as colors do. Switching the override off undoes the
++  styling in every shadow root it reached, and the delayed rescans it schedules
++  cannot bring a stopped agent back to life.
+ - Fixed: a site's own `!important` declaration on an id or class selector used to
+   win against the extension, leaving patches of unreadable text. The generated
+   selectors carry specificity padding now.
+@@ -72,24 +133,41 @@ runs on Manifest V3, with the same features and the same settings.
+ | -------------------- | --------------------------------------------------------- |
+ | `manifest.json`      | Manifest V3 declaration                                    |
+ | `background.js`      | Service worker: decides and injects the styling            |
+-| `common/settings.js` | Settings model, override rules, stylesheet generation      |
++| `common/settings.js` | Settings model and override rules                          |
+ | `popup.html/.js`     | Toolbar popup: per page, per domain and global override    |
+ | `options.html/.js`   | Preferences                                                |
+ | `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
++| `common/migration.js`| Carries version 2.x settings over, retried until it works   |
+ | `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
+-| `agent.js`           | Styles shadow trees and tags background images, injected on demand |
++| `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
+ | `libs/font_detect.js`| Detects which fonts the system has                         |
++| `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
+ | `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
++| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
++| `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
+ 
+ ## Development
+ 
+ Load the folder as an unpacked extension from `chrome://extensions` with
+ developer mode enabled.
+ 
+-The stylesheet is checked against a real layout in headless Chrome:
++The stylesheet is checked against a real layout in headless Chrome, and the
++extension itself is loaded into a browser and driven the way a user drives it:
+ 
+ ```
+ npm test
+ ```
+ 
++The second half needs a browser that still accepts `--load-extension`, which
++branded Google Chrome does not. Playwright's or Puppeteer's Chromium is picked
++up from the usual cache directories; otherwise point `CHROME_UNBRANDED` at one
++(`npx playwright install chromium` gets you one), or that half reports `SKIP`.
++
++The performance regression test is separate so normal test results are not
++affected by machine load:
++
++```
++npm run test:perf
++```
++
+ Set `CHROME` if Chrome is not at the default Windows install path.
+diff --git a/agent.js b/agent.js
+index 7b35f2a..7ddad0a 100644
+--- a/agent.js
++++ b/agent.js
+@@ -13,8 +13,13 @@
+  *
+  * 2. It styles shadow trees. A stylesheet injected in the document never
+  *    crosses a shadow boundary, so components built with shadow DOM keep the
+- *    colors their own styles give them. The same rules, written around `:host`,
+- *    are adopted by every shadow root.
++ *    colors, the font and the images their own styles give them. The same
++ *    rules, written around `:host`, are adopted by every shadow root, and every
++ *    shadow root found is watched for changes of its own - the document's
++ *    observer cannot see inside one.
++ *
++ * Only the first job needs the page measured; a font-only override gets the
++ * agent for its shadow trees and skips the measuring entirely.
+  */
+ (function () {
+     const CLEAR = 'data-changecolors-clear';
+@@ -22,7 +27,18 @@
+     // Anything this translucent reads as an overlay rather than a surface.
+     const SOLID_ALPHA = 0.9;
+     const FLUSH_DELAY = 100;
++    // A flush walks at most this many elements; what is left over is picked up
++    // by the next one, right away.
+     const MAX_PER_FLUSH = 6000;
++    const CONTINUE_DELAY = 16;
++
++    const OBSERVED = {
++        childList: true,
++        subtree: true,
++        attributes: true,
++        attributeOldValue: true,
++        attributeFilter: ['class', 'style']
++    };
+ 
+     if (window.__changeColorsAgent) {
+         window.__changeColorsAgent.rescan();
+@@ -31,11 +47,25 @@
+ 
+     let sheet = null;
+     let sheetCss = '';
++    // Set by stop(). The delayed rescans below outlive it, and an agent that
++    // has been stopped must not tag anything again - the page may have been
++    // handed to a new agent in the meantime.
++    let stopped = false;
++    // Whether the stylesheet paints backgrounds, and elements therefore have to
++    // be measured.
++    let measuring = true;
++    // Every shadow root the stylesheet was put into, for the whole life of the
++    // agent: stop() has to be able to take it out of all of them, including the
++    // ones found before the last setCss().
+     const styledRoots = new Set();
++    const observedRoots = new Set();
++    // Timers of the delayed rescans, so stop() can cancel them.
++    const delayed = [];
+ 
+     /* ------------------------------------------------------- shadow trees */
+ 
+     function adopt(root) {
++        observeRoot(root);
+         try {
+             if (sheet) {
+                 if (root.adoptedStyleSheets.indexOf(sheet) === -1) {
+@@ -59,8 +89,27 @@
+         styledRoots.add(root);
+     }
+ 
+-    function setCss(css) {
++    /**
++     * A shadow tree's changes are invisible to an observer watching the
++     * document, so each root found gets watched itself. That covers a component
++     * rendering its content after it is attached, which the periodic rescans
++     * below only caught while they lasted.
++     */
++    function observeRoot(root) {
++        if (observedRoots.has(root)) {
++            return;
++        }
++        try {
++            observer.observe(root, OBSERVED);
++            observedRoots.add(root);
++        } catch (e) {
++            // Root is gone.
++        }
++    }
++
++    function setCss(css, measure) {
+         sheetCss = css;
++        measuring = measure !== false;
+         if (!sheet) {
+             try {
+                 sheet = new CSSStyleSheet();
+@@ -75,20 +124,59 @@
+                 sheet = null;
+             }
+         }
+-        styledRoots.clear();
++        // The roots that already have this stylesheet keep it: it is the same
++        // CSSStyleSheet object, and replaceSync() has just given it the new
++        // rules. The inventory is not cleared, because it is what stop() undoes
++        // the styling from.
+         rescan();
+     }
+ 
+     /* ----------------------------------------------------- own background */
+ 
+-    function isSeeThrough(color) {
+-        const match = /^rgba?\(([^)]+)\)/.exec(color || '');
++    /**
++     * The alpha of a computed color.
++     *
++     * getComputedStyle() serializes a color in the syntax it was written in, so
++     * a site using `oklch()`, `lab()` or `color()` - all of them ordinary CSS
++     * now - does not come back as `rgb()`. Every one of those puts the alpha
++     * last, after a slash; only the legacy comma syntax of rgba() and hsla()
++     * puts it fourth in the list. Anything unrecognised counts as opaque, which
++     * paints the element rather than leaving it see-through: the same fallback
++     * the stylesheet itself takes.
++     */
++    function alphaOf(color) {
++        const text = String(color || '').trim();
++        if (!text) {
++            return 1;
++        }
++        if (text === 'transparent') {
++            return 0;
++        }
++        const match = /^[a-z-]+\(([^)]*)\)$/i.exec(text);
+         if (!match) {
+-            return true;
++            return 1;
+         }
+-        const parts = match[1].split(/[,/]/);
+-        const alpha = parts.length > 3 ? parseFloat(parts[3]) : 1;
+-        return !(alpha >= SOLID_ALPHA);
++        const body = match[1];
++        const slash = body.indexOf('/');
++        let alpha = slash === -1 ? null : body.slice(slash + 1);
++        if (alpha === null) {
++            const parts = body.split(',');
++            alpha = parts.length > 3 ? parts[3] : null;
++        }
++        if (alpha === null) {
++            return 1;
++        }
++        alpha = alpha.trim();
++        // `none` is CSS Color 4 for "no alpha component", which renders opaque.
++        const value = alpha === 'none' ? 1 : parseFloat(alpha);
++        if (!isFinite(value)) {
++            return 1;
++        }
++        return alpha.endsWith('%') ? value / 100 : value;
++    }
++
++    function isSeeThrough(color) {
++        return !(alphaOf(color) >= SOLID_ALPHA);
+     }
+ 
+     /**
+@@ -122,90 +210,210 @@
+ 
+     /* ------------------------------------------------------------- walking */
+ 
+-    function collect(root, into, budget) {
+-        const elements = root.querySelectorAll('*');
+-        for (let i = 0; i < elements.length && into.length < budget; i++) {
+-            const element = elements[i];
+-            if (element !== document.documentElement && element !== document.body) {
+-                into.push(element);
+-            }
++    function want(element, batch, seen) {
++        if (element === document.documentElement || element === document.body) {
++            return;
++        }
++        if (seen.has(element) || !element.isConnected) {
++            return;
++        }
++        seen.add(element);
++        batch.push(element);
++    }
++
++    // Subtrees to walk (new content, or a subtree whose styling may have
++    // changed), and single elements to re-check.
++    const pendingRoots = new Set();
++    const pendingElements = new Set();
++    // Walks left unfinished by a flush that ran out of budget.
++    const walks = [];
++    let timer = null;
++
++    function makeWalk(root) {
++        return {
++            root: root,
++            walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT),
++            started: false
++        };
++    }
++
++    /**
++     * Measures and styles what is pending, up to MAX_PER_FLUSH elements. A
++     * bigger subtree than that is not dropped: the walk is kept where it
++     * stopped and continued in the next flush, which is what keeps the deep
++     * DOM of a site like YouTube or Twitch measured all the way down instead of
++     * only for its first few thousand elements.
++     */
++    function flush() {
++        timer = null;
++        const batch = [];
++        const seen = new Set();
++        let budget = MAX_PER_FLUSH;
++
++        function handle(element) {
++            budget--;
+             if (element.shadowRoot) {
+                 adopt(element.shadowRoot);
+-                collect(element.shadowRoot, into, budget);
++                walks.push(makeWalk(element.shadowRoot));
++            }
++            if (measuring) {
++                want(element, batch, seen);
+             }
+         }
+-    }
+ 
+-    function scan(roots) {
+-        const elements = [];
+-        for (const root of roots) {
+-            if (root.isConnected === false) {
+-                continue;
++        pendingElements.forEach(function (element) {
++            // Checked here as well, because a component can attach its shadow
++            // root long after the rescans below have stopped.
++            if (element.shadowRoot && !observedRoots.has(element.shadowRoot)) {
++                adopt(element.shadowRoot);
++                walks.push(makeWalk(element.shadowRoot));
+             }
+-            if (root.nodeType === Node.ELEMENT_NODE &&
+-                    root !== document.documentElement && root !== document.body) {
+-                elements.push(root);
++            if (measuring) {
++                want(element, batch, seen);
+             }
+-            collect(root, elements, MAX_PER_FLUSH);
+-            if (elements.length >= MAX_PER_FLUSH) {
+-                break;
++        });
++        pendingElements.clear();
++
++        pendingRoots.forEach(function (root) {
++            if (root.isConnected !== false) {
++                walks.push(makeWalk(root));
++            }
++        });
++        pendingRoots.clear();
++
++        while (walks.length && budget > 0) {
++            const walk = walks[0];
++            if (!walk.started) {
++                walk.started = true;
++                if (walk.root.nodeType === Node.ELEMENT_NODE) {
++                    handle(walk.root);
++                }
++            }
++            let node = null;
++            while (budget > 0 && (node = walk.walker.nextNode())) {
++                handle(node);
++            }
++            if (budget > 0) {
++                walks.shift();
+             }
+         }
+-        measure(elements);
+-    }
+ 
+-    const pending = new Set();
+-    let timer = null;
++        measure(batch);
+ 
+-    function flush() {
+-        timer = null;
+-        const roots = Array.from(pending);
+-        pending.clear();
+-        scan(roots);
++        if (walks.length) {
++            timer = setTimeout(flush, CONTINUE_DELAY);
++        }
+     }
+ 
+-    function schedule(root) {
+-        pending.add(root);
++    function wake() {
++        if (stopped) {
++            return;
++        }
+         if (timer === null) {
+             timer = setTimeout(flush, FLUSH_DELAY);
+         }
+     }
+ 
++    function scheduleSubtree(root) {
++        pendingRoots.add(root);
++        wake();
++    }
++
++    function scheduleElement(element) {
++        pendingElements.add(element);
++        wake();
++    }
++
+     function rescan() {
++        if (stopped) {
++            return;
++        }
+         if (document.documentElement) {
+-            schedule(document.documentElement);
++            scheduleSubtree(document.documentElement);
+         }
+     }
+ 
++    /**
++     * Returns the inline declarations that can alter a background. Comparing
++     * these lets us ignore animation-frame updates to unrelated properties
++     * such as a volume slider's width. Custom properties are included because
++     * a background declaration may refer to one with var().
++     */
++    function inlineBackground(cssText) {
++        return String(cssText || '').split(';').map(function (declaration) {
++            const colon = declaration.indexOf(':');
++            if (colon === -1) {
++                return '';
++            }
++            const property = declaration.slice(0, colon).trim().toLowerCase();
++            return property === 'background' || property.indexOf('background-') === 0 ||
++                    property.indexOf('--') === 0 ? declaration.trim() : '';
++        }).filter(Boolean).sort().join(';');
++    }
++
+     const observer = new MutationObserver(function (records) {
+         for (const record of records) {
+             if (record.type === 'childList') {
+                 record.addedNodes.forEach(function (node) {
+                     if (node.nodeType === Node.ELEMENT_NODE) {
+-                        schedule(node);
++                        scheduleSubtree(node);
+                     }
+                 });
+-            } else if (record.target.nodeType === Node.ELEMENT_NODE) {
+-                // A class or style change is how a page repaints an element.
+-                schedule(record.target);
++                continue;
++            }
++            if (!measuring || record.target.nodeType !== Node.ELEMENT_NODE) {
++                continue;
++            }
++            if (record.attributeName === 'style') {
++                const before = inlineBackground(record.oldValue);
++                const after = inlineBackground(record.target.getAttribute('style'));
++                // Inline styles change every frame on things like a volume
++                // slider or a progress bar. Ignore those unless a background
++                // declaration (or a custom property it can use) changed.
++                if (before === after) {
++                    continue;
++                }
++                // A custom property is inherited, so a descendant's background
++                // can be built from the one that just changed.
++                if (before.indexOf('--') !== -1 || after.indexOf('--') !== -1) {
++                    scheduleSubtree(record.target);
++                    continue;
++                }
++                scheduleElement(record.target);
++                continue;
+             }
++            // A class change usually brings a background with it, and rules
++            // like `.dark .card {...}` mean it brings one to the subtree as
++            // well - a theme switch or an expanding menu would otherwise leave
++            // stale verdicts behind. The walk is bounded per flush, so a large
++            // subtree costs time rather than responsiveness.
++            scheduleSubtree(record.target);
+         }
+     });
+ 
+     function start() {
++        if (stopped) {
++            // Stopped before the document was ready enough to start on.
++            return;
++        }
+         rescan();
+-        observer.observe(document.documentElement, {
+-            childList: true,
+-            subtree: true,
+-            attributes: true,
+-            attributeFilter: ['class', 'style']
+-        });
++        observer.observe(document.documentElement, OBSERVED);
+         // Shadow roots are often attached, and backgrounds often applied, after
+-        // the first pass, and changes inside a shadow tree are invisible to the
+-        // observer above.
++        // the first pass. Each root found is watched from then on; these
++        // rescans are what finds the ones attached later.
+         window.addEventListener('load', rescan, {once: true});
+         [500, 2000, 5000].forEach(function (delay) {
+-            setTimeout(rescan, delay);
++            delayed.push(setTimeout(rescan, delay));
++        });
++    }
++
++    function cleanAttributes(root) {
++        if (!root || !root.querySelectorAll) {
++            return;
++        }
++        root.querySelectorAll('[' + CLEAR + '],[' + PROBE + ']').forEach(function (element) {
++            element.removeAttribute(CLEAR);
++            element.removeAttribute(PROBE);
+         });
+     }
+ 
+@@ -213,11 +421,20 @@
+         setCss: setCss,
+         rescan: rescan,
+         stop: function () {
++            stopped = true;
+             observer.disconnect();
++            window.removeEventListener('load', rescan);
++            document.removeEventListener('DOMContentLoaded', start);
++            delayed.forEach(clearTimeout);
++            delayed.length = 0;
++            observedRoots.clear();
+             if (timer !== null) {
+                 clearTimeout(timer);
+                 timer = null;
+             }
++            walks.length = 0;
++            pendingRoots.clear();
++            pendingElements.clear();
+             styledRoots.forEach(function (root) {
+                 try {
+                     root.adoptedStyleSheets = root.adoptedStyleSheets.filter(function (adopted) {
+@@ -230,12 +447,11 @@
+                 if (style) {
+                     style.remove();
+                 }
++                // Tags set inside a shadow tree are out of the document's reach.
++                cleanAttributes(root);
+             });
+             styledRoots.clear();
+-            document.querySelectorAll('[' + CLEAR + '],[' + PROBE + ']').forEach(function (element) {
+-                element.removeAttribute(CLEAR);
+-                element.removeAttribute(PROBE);
+-            });
++            cleanAttributes(document);
+             delete window.__changeColorsAgent;
+         }
+     };
+diff --git a/background.js b/background.js
+index 4e1ad4e..89854ff 100644
+--- a/background.js
++++ b/background.js
+@@ -6,9 +6,25 @@
+  * the "no flash of the original page" behaviour of the Manifest V2 version
+  * without shipping a script into every frame of every site.
+  *
+- * The service worker is not persistent, so the stylesheet currently injected in
+- * a tab is remembered in chrome.storage.session (needed to remove exactly that
+- * stylesheet later) rather than in a module variable.
++ * Two things shape the way that is done.
++ *
++ * The unit of work is a document, not a tab and not a frame. A frame keeps its
++ * id when it navigates, so anything aimed at a frame lands in whatever document
++ * the frame holds by the time it arrives - which, after a redirect, is a page
++ * the extension may have decided not to touch at all. Every injection and every
++ * removal names a `documentId`, so work decided for one document can only ever
++ * reach that document; when it is gone, the call simply fails.
++ *
++ * And removing a stylesheet needs the exact text it was inserted with, so the
++ * text of every stylesheet believed to be in a document is kept - in
++ * chrome.storage.session, because the service worker is not persistent - until
++ * a removal for that document has actually succeeded. A stylesheet forgotten
++ * while it is still in a page is one nothing can take out again.
++ *
++ * Everything that touches a tab goes through one queue per tab, which keeps
++ * these read-modify-writes from overlapping and gives sub frames their ordering:
++ * a frame commits after its parent, so by the time its task runs the top frame's
++ * task has recorded what the page wants.
+  */
+ 
+ import {
+@@ -18,76 +34,333 @@ import {
+     toggleFlag,
+     toggleListEntry
+ } from './common/settings.js';
+-import {buildCss, buildShadowCss, needsPageAgent} from './common/css.js';
++import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
++import {migrateLegacySettings} from './common/migration.js';
+ 
+ const ICON_ON = 'icons/colors_icons.png';
+ const ICON_OFF = 'icons/colors_icons_grey.png';
+ const INJECTED_PREFIX = 'injected:';
+ 
++/* -------------------------------------------------------- one queue per tab */
++
++// Tail of the chain of tasks queued for a tab, the sequence number of the
++// newest full resync queued for it, and how many documents its top frame has
++// committed - work queued for a page the tab has since left is pointless.
++const tabTasks = new Map();
++const latestResync = new Map();
++const navigations = new Map();
++let sequence = 0;
++
++function navigationOf(tabId) {
++    return navigations.get(tabId) || 0;
++}
++
++function noteNavigation(tabId) {
++    navigations.set(tabId, navigationOf(tabId) + 1);
++}
++
++function runOnTab(tabId, task) {
++    const previous = tabTasks.get(tabId) || Promise.resolve();
++    const next = previous.then(task, task).catch(function () {
++        // A failed task must not break the chain for the ones behind it.
++    });
++    tabTasks.set(tabId, next);
++    next.then(function () {
++        if (tabTasks.get(tabId) === next) {
++            tabTasks.delete(tabId);
++            latestResync.delete(tabId);
++        }
++    });
++    return next;
++}
++
++/**
++ * Queues a sync for a tab.
++ *
++ * A full resync is coalesced: while one waits its turn a newer one makes it
++ * pointless, and dropping it matters because the options page writes to storage
++ * on every `input` event - dragging a color picker queues dozens of them.
++ * A freshly committed document is never coalesced; each one has a document of
++ * its own to style.
++ *
++ * The navigation counter only saves pointless work here. What keeps a task from
++ * reaching the wrong page is that it names the documents it works on.
++ */
++function queueSync(tabId, url, fresh) {
++    const navigation = navigationOf(tabId);
++    if (fresh !== undefined) {
++        return runOnTab(tabId, function () {
++            if (navigationOf(tabId) !== navigation) {
++                return undefined;
++            }
++            return syncTab(tabId, url, fresh);
++        });
++    }
++    const seq = ++sequence;
++    latestResync.set(tabId, seq);
++    return runOnTab(tabId, function () {
++        if (latestResync.get(tabId) !== seq) {
++            return undefined;
++        }
++        // The URL a resync was queued with can be a page ago by the time it
++        // runs, so the tab's live frames are what it works from; `url` is only
++        // a fallback for when they cannot be read.
++        return syncTab(tabId, url);
++    });
++}
++
++/* ------------------------------------------------------------ tab plumbing */
++
++/**
++ * What is known about a tab:
++ *
++ *   desired    what the page should have: its stylesheet, the stylesheet for
++ *              its shadow trees, and whether the agent has to measure. Written
++ *              as soon as a document commits, before anything is injected,
++ *              because a sub frame commits while the top frame's injection is
++ *              still running and has to read this navigation's answer, not the
++ *              last page's. It is the one decision for the page: a sub frame
++ *              applies it rather than deciding again from the settings, which
++ *              may have moved on since.
++ *   documents  documentId -> the stylesheets believed to be in that document,
++ *              as indices into `sheets`. A stylesheet is added only by an
++ *              insertCSS that succeeded and taken away only by a removeCSS that
++ *              succeeded. Each call names one document, so there is no partial
++ *              success to misread: what the list says is what that document
++ *              holds.
++ *   sheets     the text of those stylesheets, held once however many documents
++ *              have them. The text is the only thing that can remove a
++ *              stylesheet, and it is a few kilobytes, so documents refer to it
++ *              rather than repeat it.
++ *   pages      documentId -> the id of the top level document it belongs to,
++ *              and `top`, the page the tab is on. A page restored from the
++ *              back/forward cache brings its sub frames back already loaded:
++ *              they commit nothing, and `webNavigation.getAllFrames` does not
++ *              list them either, so this is the only way left to reach them.
++ *
++ * A document the browser no longer lists is not necessarily gone: the
++ * back/forward cache holds whole documents, stylesheet and all, and hands them
++ * back on the next Back. Their entries are therefore kept - they cost an index
++ * each - until there are more of them than any tab plausibly has, and only ones
++ * that are not live are ever dropped.
++ */
++const MAX_DOCUMENTS = 50;
++
+ function injectedKey(tabId) {
+     return INJECTED_PREFIX + tabId;
+ }
+ 
+-async function getInjectedCss(tabId) {
++/** What a page gets when nothing is meant to be applied to it. */
++const NOTHING = {css: null, shadowCss: null, probe: false};
++
++async function getRecord(tabId) {
+     const stored = await chrome.storage.session.get(injectedKey(tabId));
+-    return stored[injectedKey(tabId)] || null;
++    const value = stored[injectedKey(tabId)];
++    return {
++        desired: (value && value.desired) || null,
++        documents: (value && value.documents) || {},
++        sheets: (value && value.sheets) || [],
++        pages: (value && value.pages) || {},
++        top: (value && value.top) || null
++    };
++}
++
++/**
++ * The decision recorded for a page. A page with no record, or one whose record
++ * says nothing is wanted, are the same thing to a document: take the stylesheet
++ * out and stop the agent.
++ */
++function decisionOf(record) {
++    return record.desired || NOTHING;
+ }
+ 
+-function rememberInjectedCss(tabId, css) {
+-    if (css) {
+-        return chrome.storage.session.set({[injectedKey(tabId)]: css});
++/** The documents recorded as belonging to a page, that page's own aside. */
++function documentsOfPage(record, topDocumentId) {
++    return Object.keys(record.documents).filter(function (id) {
++        return id !== topDocumentId && record.pages[id] === topDocumentId;
++    });
++}
++
++/** Drops the text of stylesheets no document refers to any more. */
++function compact(record) {
++    for (const id of Object.keys(record.pages)) {
++        if (!record.documents[id]) {
++            delete record.pages[id];
++        }
++    }
++    const sheets = [];
++    const moved = new Map();
++    for (const id of Object.keys(record.documents)) {
++        record.documents[id] = record.documents[id].map(function (index) {
++            if (!moved.has(index)) {
++                moved.set(index, sheets.push(record.sheets[index]) - 1);
++            }
++            return moved.get(index);
++        });
++    }
++    record.sheets = sheets;
++}
++
++function saveRecord(tabId, record) {
++    compact(record);
++    if (!decisionOf(record).css && !Object.keys(record.documents).length) {
++        return chrome.storage.session.remove(injectedKey(tabId));
++    }
++    return chrome.storage.session.set({[injectedKey(tabId)]: record});
++}
++
++function sheetsOf(record, documentId) {
++    return (record.documents[documentId] || []).map(function (index) {
++        return record.sheets[index];
++    });
++}
++
++function indexOfSheet(record, css) {
++    const index = record.sheets.indexOf(css);
++    return index === -1 ? record.sheets.push(css) - 1 : index;
++}
++
++/**
++ * Forgets the oldest documents that are no longer live. A document still listed
++ * by the browser is kept whatever the count: its stylesheets can still be
++ * removed, and only this record knows their text.
++ */
++function forgetDeadDocuments(record, live) {
++    const ids = Object.keys(record.documents);
++    if (ids.length <= MAX_DOCUMENTS) {
++        return;
++    }
++    for (const id of ids) {
++        if (Object.keys(record.documents).length <= MAX_DOCUMENTS) {
++            return;
++        }
++        if (!live || !live.has(id)) {
++            delete record.documents[id];
++        }
++    }
++}
++
++/** The documents the tab is holding right now, top level frame first. */
++async function liveFrames(tabId) {
++    try {
++        const frames = await chrome.webNavigation.getAllFrames({tabId: tabId});
++        return (frames || []).filter(function (frame) {
++            return Boolean(frame.documentId);
++        });
++    } catch (e) {
++        return [];
+     }
+-    return chrome.storage.session.remove(injectedKey(tabId));
+ }
+ 
+-async function insertCss(tabId, css, frameId) {
+-    const target = frameId === undefined ?
+-        {tabId: tabId, allFrames: true} :
+-        {tabId: tabId, frameIds: [frameId]};
++/** Resolves true only if the stylesheet is now in that document. */
++async function insertCss(tabId, documentId, css) {
+     try {
+-        await chrome.scripting.insertCSS({target: target, css: css});
++        await chrome.scripting.insertCSS({
++            target: {tabId: tabId, documentIds: [documentId]},
++            css: css
++        });
++        return true;
+     } catch (e) {
+-        // The frame can be gone already, or be a page we may not touch.
++        // The document is gone already, or is one we may not touch.
++        return false;
+     }
+ }
+ 
+-async function removeCss(tabId, css) {
++/** Resolves true only if the stylesheet is no longer in that document. */
++async function removeCss(tabId, documentId, css) {
+     try {
+-        await chrome.scripting.removeCSS({target: {tabId: tabId, allFrames: true}, css: css});
++        await chrome.scripting.removeCSS({
++            target: {tabId: tabId, documentIds: [documentId]},
++            css: css
++        });
++        return true;
+     } catch (e) {
+-        // Nothing to remove - the document was replaced in the meantime.
++        return false;
++    }
++}
++
++/**
++ * Brings one document in line with what the page should have, and records what
++ * it ends up holding.
++ *
++ * This is the same work whether the document has just committed, has come back
++ * from the back/forward cache with the stylesheet of an older setting still in
++ * it, or is simply being resynced: what it should have is compared with what it
++ * is known to have.
++ */
++async function syncDocument(tabId, documentId, wantedCss, record) {
++    const present = sheetsOf(record, documentId);
++    const kept = [];
++    for (const css of present) {
++        if (css === wantedCss || !await removeCss(tabId, documentId, css)) {
++            kept.push(css);
++        }
++    }
++    if (wantedCss && !kept.includes(wantedCss) &&
++            await insertCss(tabId, documentId, wantedCss)) {
++        kept.push(wantedCss);
++    }
++    if (kept.length) {
++        record.documents[documentId] = kept.map(function (css) {
++            return indexOfSheet(record, css);
++        });
++    } else {
++        delete record.documents[documentId];
+     }
+ }
+ 
+ /**
+  * agent.js styles shadow trees (a document stylesheet cannot reach into them)
+- * and tags the elements carrying a background image. It is needed whenever the
+- * colors are overridden.
++ * and tags the elements carrying a background of their own.
++ *
++ * Both injections ask for `injectImmediately`. Without it chrome.scripting runs
++ * a script at `document_idle`, while the document stylesheet paints every
++ * element with the chosen background from the first paint on: the see-through
++ * layers a page stacks over its content - a headline over a hero banner, the
++ * controls over a video - would stay opaque until the page went idle.
+  */
+-async function startAgent(tabId, shadowCss, frameId) {
+-    const target = frameId === undefined ?
+-        {tabId: tabId, allFrames: true} :
+-        {tabId: tabId, frameIds: [frameId]};
++async function startAgent(tabId, documentId, shadowCss, probe) {
++    const target = {tabId: tabId, documentIds: [documentId]};
+     try {
+-        await chrome.scripting.executeScript({target: target, files: ['agent.js']});
+         await chrome.scripting.executeScript({
+             target: target,
+-            args: [shadowCss],
+-            func: function (css) {
++            files: ['agent.js'],
++            injectImmediately: true
++        });
++        await chrome.scripting.executeScript({
++            target: target,
++            args: [shadowCss, probe],
++            injectImmediately: true,
++            func: function (css, measure) {
+                 if (window.__changeColorsAgent) {
+-                    window.__changeColorsAgent.setCss(css);
++                    window.__changeColorsAgent.setCss(css, measure);
+                 }
+             }
+         });
+     } catch (e) {
+-        // Frame gone, or a document we may not script.
++        // Document gone, or one we may not script.
+     }
+ }
+ 
+-async function stopAgent(tabId) {
++/**
++ * Puts the document's agent in the state the decision calls for. Stopping is
++ * not only for a document that had one: a document restored from the
++ * back/forward cache comes back with the agent it was left running, and with
++ * the tags that agent put on the page.
++ */
++async function applyAgent(tabId, documentId, decision) {
++    if (decision.shadowCss !== null) {
++        await startAgent(tabId, documentId, decision.shadowCss, decision.probe);
++    } else {
++        await stopAgent(tabId, documentId);
++    }
++}
++
++async function stopAgent(tabId, documentId) {
+     try {
+         await chrome.scripting.executeScript({
+-            target: {tabId: tabId, allFrames: true},
++            target: {tabId: tabId, documentIds: [documentId]},
++            injectImmediately: true,
+             func: function () {
+                 if (window.__changeColorsAgent) {
+                     window.__changeColorsAgent.stop();
+@@ -111,91 +384,177 @@ async function setIcon(tabId, active) {
+     }
+ }
+ 
+-/**
+- * Brings a tab in line with the current settings.
+- * `freshFrameId` is set when a document (or sub frame) has just committed: the
+- * old stylesheet went away with the old document, so it only needs injecting.
+- */
+-async function syncTab(tabId, url, freshFrameId) {
+-    if (!isSupportedUrl(url)) {
+-        await setIcon(tabId, false);
+-        return;
+-    }
+-
++/** What the current settings ask for on one URL. */
++async function wantedFor(url) {
+     const settings = await getSettings();
+     const state = getOverrideState(settings, url);
+-    const wantedCss = state.active ? buildCss(settings) : null;
+-    const shadowCss = state.active && needsPageAgent(settings) ? buildShadowCss(settings) : null;
+-    await setIcon(tabId, state.active);
++    if (!state.active) {
++        return {css: null, shadowCss: null, probe: false};
++    }
++    return {
++        css: buildCss(settings),
++        shadowCss: needsPageAgent(settings) ? buildShadowCss(settings) : null,
++        probe: needsBackgroundProbe(settings)
++    };
++}
++
++/**
++ * The tab is on a page the extension does not touch. Only the decision is
++ * dropped: the documents already recorded may still be sitting in the
++ * back/forward cache with a stylesheet in them, and this record holds the only
++ * copy of the text that can remove it. They go when the tab does.
++ */
++async function clearTab(tabId) {
++    const record = await getRecord(tabId);
++    record.desired = null;
++    await saveRecord(tabId, record);
++    await setIcon(tabId, false);
++}
+ 
+-    if (freshFrameId !== undefined) {
+-        if (wantedCss) {
+-            await insertCss(tabId, wantedCss, freshFrameId);
++/**
++ * Brings a tab in line with the current settings. Runs on the tab's queue, so
++ * it has the tab to itself for the whole of its read-modify-write.
++ *
++ * `fresh` ({frameId, documentId}) is set when a top level document has just
++ * committed. The work is the same as a resync, but for that document alone:
++ * the frame may already hold another one, and the other frames of the page get
++ * their own commits.
++ */
++async function syncTab(tabId, url, fresh) {
++    if (fresh !== undefined) {
++        if (!isSupportedUrl(url)) {
++            await clearTab(tabId);
++            return;
+         }
+-        if (shadowCss !== null) {
+-            await startAgent(tabId, shadowCss, freshFrameId);
++        const wanted = await wantedFor(url);
++        await setIcon(tabId, Boolean(wanted.css));
++        const record = await getRecord(tabId);
++        // Recorded before anything is injected, so a sub frame committing while
++        // the agent is still being injected reads this navigation's answer.
++        record.desired = wanted.css ? wanted : null;
++        await saveRecord(tabId, record);
++        record.top = fresh.documentId;
++        record.pages[fresh.documentId] = fresh.documentId;
++        await syncDocument(tabId, fresh.documentId, wanted.css, record);
++        // A page restored from the back/forward cache brings its sub frames
++        // back with it, already loaded. They commit nothing, and the frame tree
++        // does not list them, so the record of which documents belonged to this
++        // page is the only way left to reach them. A page that has just loaded
++        // has none of these: its sub frames commit later, and are handled then.
++        const others = documentsOfPage(record, fresh.documentId);
++        for (const documentId of others) {
++            await syncDocument(tabId, documentId, wanted.css, record);
+         }
+-        if (freshFrameId === 0) {
+-            await rememberInjectedCss(tabId, wantedCss);
++        forgetDeadDocuments(record, new Set([fresh.documentId].concat(others)));
++        await saveRecord(tabId, record);
++        await applyAgent(tabId, fresh.documentId, wanted);
++        for (const documentId of others) {
++            await applyAgent(tabId, documentId, wanted);
+         }
+         return;
+     }
+ 
+-    const injectedCss = await getInjectedCss(tabId);
+-    if (injectedCss === wantedCss) {
+-        return;
++    const frames = await liveFrames(tabId);
++    const top = frames.find(function (frame) {
++        return frame.frameId === 0;
++    });
++    let currentUrl = top ? top.url : url;
++    if (!top) {
++        try {
++            currentUrl = (await chrome.tabs.get(tabId)).url;
++        } catch (e) {
++            return;
++        }
+     }
+-    if (injectedCss) {
+-        await removeCss(tabId, injectedCss);
++    if (!isSupportedUrl(currentUrl)) {
++        await clearTab(tabId);
++        return;
+     }
+-    if (wantedCss) {
+-        await insertCss(tabId, wantedCss);
++
++    const wanted = await wantedFor(currentUrl);
++    await setIcon(tabId, Boolean(wanted.css));
++
++    const record = await getRecord(tabId);
++    record.desired = wanted.css ? wanted : null;
++    const live = new Set();
++    record.top = top ? top.documentId : record.top;
++    for (const frame of frames) {
++        live.add(frame.documentId);
++        if (record.top) {
++            record.pages[frame.documentId] = record.top;
++        }
++        // Sub frames follow the decision taken for the page they belong to.
++        await syncDocument(tabId, frame.documentId, wanted.css, record);
+     }
+-    if (shadowCss !== null) {
+-        await startAgent(tabId, shadowCss);
+-    } else {
+-        await stopAgent(tabId);
++    forgetDeadDocuments(record, live);
++    await saveRecord(tabId, record);
++
++    for (const frame of frames) {
++        await applyAgent(tabId, frame.documentId, wanted);
+     }
+-    await rememberInjectedCss(tabId, wantedCss);
+ }
+ 
+ async function syncAllTabs() {
+     const tabs = await chrome.tabs.query({});
+     await Promise.all(tabs.map(function (tab) {
+-        return syncTab(tab.id, tab.url);
++        return queueSync(tab.id, tab.url);
+     }));
+ }
+ 
+ async function syncActiveTab(tabId) {
+     try {
+         const tab = await chrome.tabs.get(tabId);
+-        await syncTab(tab.id, tab.url);
++        await queueSync(tab.id, tab.url);
+     } catch (e) {
+         // Tab is gone.
+     }
+ }
+ 
+-chrome.webNavigation.onCommitted.addListener(async function (details) {
++/**
++ * A frame commits after its parent has, so queueing here - synchronously, in
++ * listener order - puts a sub frame behind the top frame's task, and it reads
++ * the stylesheet that task recorded.
++ *
++ * A document restored from the back/forward cache commits again with the id it
++ * already had, and `syncDocument()` treats it for what it is: a document that
++ * may still hold the stylesheet of an older setting, to be brought in line
++ * rather than assumed empty.
++ */
++chrome.webNavigation.onCommitted.addListener(function (details) {
+     if (details.frameId === 0) {
+-        await syncTab(details.tabId, details.url, 0);
++        // Recorded before queueing, so work queued for the page this one
++        // replaces can tell that it has nothing left to do.
++        noteNavigation(details.tabId);
++        queueSync(details.tabId, details.url, {
++            frameId: details.frameId,
++            documentId: details.documentId
++        });
+         return;
+     }
+-    // Sub frames inherit the decision taken for the top level document.
+-    const injectedCss = await getInjectedCss(details.tabId);
+-    if (injectedCss) {
+-        await insertCss(details.tabId, injectedCss, details.frameId);
+-        const settings = await getSettings();
+-        if (needsPageAgent(settings)) {
+-            await startAgent(details.tabId, buildShadowCss(settings), details.frameId);
++    const navigation = navigationOf(details.tabId);
++    runOnTab(details.tabId, async function () {
++        if (navigationOf(details.tabId) !== navigation) {
++            return;
+         }
+-    }
++        // Whatever the page decided, including that it wants nothing: a sub
++        // frame restored from the back/forward cache still holds the stylesheet
++        // and the agent it was left with, and both have to go.
++        const record = await getRecord(details.tabId);
++        const decision = decisionOf(record);
++        if (record.top) {
++            record.pages[details.documentId] = record.top;
++        }
++        await syncDocument(details.tabId, details.documentId, decision.css, record);
++        await saveRecord(details.tabId, record);
++        await applyAgent(details.tabId, details.documentId, decision);
++    });
+ });
+ 
+ // Single page applications change the URL without committing a new document,
+ // which can flip a per-page override on or off.
+ chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
+     if (details.frameId === 0) {
+-        syncTab(details.tabId, details.url);
++        queueSync(details.tabId, details.url);
+     }
+ });
+ 
+@@ -205,11 +564,14 @@ chrome.tabs.onActivated.addListener(function (activeInfo) {
+ 
+ chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+     if (changeInfo.status === 'complete' || changeInfo.url) {
+-        syncTab(tabId, tab.url);
++        queueSync(tabId, tab.url);
+     }
+ });
+ 
+ chrome.tabs.onRemoved.addListener(function (tabId) {
++    tabTasks.delete(tabId);
++    latestResync.delete(tabId);
++    navigations.delete(tabId);
+     chrome.storage.session.remove(injectedKey(tabId));
+ });
+ 
+@@ -239,71 +601,14 @@ chrome.commands.onCommand.addListener(async function (command) {
+     }
+ });
+ 
+-chrome.runtime.onInstalled.addListener(async function (details) {
+-    if (details.reason === 'update' || details.reason === 'install') {
+-        await migrateLegacySettings();
+-    }
++chrome.runtime.onInstalled.addListener(async function () {
++    await migrateLegacySettings();
+     await syncAllTabs();
+ });
+ 
+-chrome.runtime.onStartup.addListener(function () {
+-    syncAllTabs();
++chrome.runtime.onStartup.addListener(async function () {
++    // Migration is retried here: a browser start is the next chance to reach an
++    // offscreen document if the one on update could not be created.
++    await migrateLegacySettings();
++    await syncAllTabs();
+ });
+-
+-/** Resolves with the settings the offscreen document reports, or null. */
+-function waitForLegacySettings(timeoutMs) {
+-    return new Promise(function (resolve) {
+-        function stop(value) {
+-            clearTimeout(timer);
+-            chrome.runtime.onMessage.removeListener(listener);
+-            resolve(value);
+-        }
+-        function listener(request) {
+-            if (request && request.action === 'legacySettings') {
+-                stop(request.data);
+-            }
+-        }
+-        const timer = setTimeout(function () {
+-            stop(null);
+-        }, timeoutMs);
+-        chrome.runtime.onMessage.addListener(listener);
+-    });
+-}
+-
+-/**
+- * The Manifest V2 version kept its settings in the background page's
+- * localStorage, which a service worker cannot read. An offscreen document can,
+- * so it is used once to copy the old values over to chrome.storage.local.
+- */
+-async function migrateLegacySettings() {
+-    const flag = await chrome.storage.local.get({legacyMigrationDone: false});
+-    if (flag.legacyMigrationDone) {
+-        return;
+-    }
+-    let legacy = null;
+-    try {
+-        // The document reports back on its own as soon as it runs, so there is
+-        // no window in which a message could be sent before it listens.
+-        const reported = waitForLegacySettings(5000);
+-        await chrome.offscreen.createDocument({
+-            url: 'offscreen.html',
+-            reasons: ['LOCAL_STORAGE'],
+-            justification: 'Read settings saved by the previous Manifest V2 version.'
+-        });
+-        legacy = await reported;
+-    } catch (e) {
+-        // No offscreen support, or the document already exists - skip migration.
+-    } finally {
+-        try {
+-            await chrome.offscreen.closeDocument();
+-        } catch (e) {
+-            // Never opened.
+-        }
+-    }
+-
+-    const patch = {legacyMigrationDone: true};
+-    if (legacy && typeof legacy === 'object') {
+-        Object.assign(patch, legacy);
+-    }
+-    await chrome.storage.local.set(patch);
+-}
+diff --git a/common/css.js b/common/css.js
+index 3dd7a9c..032ea86 100644
+--- a/common/css.js
++++ b/common/css.js
+@@ -61,17 +61,17 @@ function prefixed(scope, selectors, boost) {
+ }
+ 
+ /**
+- * Selectors that must stay transparent so playing media remains visible, even
+- * on a page where agent.js could not run.
++ * Media never takes the background color: a <video> painted over is a black
++ * rectangle. The elements a player stacks on top of it are handled by agent.js,
++ * which finds them see-through and clears them.
++ *
++ * This deliberately does not walk up from the <video> with `:has()`. That used
++ * to cover the player's container chain, and it cost a full style
++ * recalculation on every DOM change: on a page with a live chat it took the
++ * browser roughly two hundred times longer to recalculate styles.
+  */
+ function mediaGuard(scope) {
+-    const selectors = ['video', 'audio'];
+-    let path = '> video';
+-    for (let depth = 0; depth < 4; depth++) {
+-        selectors.push('*:has(' + path + ')', '*:has(' + path + ') *');
+-        path = '> * ' + path;
+-    }
+-    return prefixed(scope, selectors, BOOST_OVER_BASE);
++    return prefixed(scope, ['video', 'audio'], BOOST_OVER_BASE);
+ }
+ 
+ /** Elements agent.js found to have no background of their own. */
+@@ -147,7 +147,24 @@ export function buildShadowCss(settings) {
+     return build(settings, SHADOW_SCOPE);
+ }
+ 
+-/** Whether the styling needs agent.js to run in the page. */
++/**
++ * Whether the styling needs agent.js to run in the page.
++ *
++ * Everything the stylesheet does - colors, the font, hiding images and plugin
++ * objects - stops at a shadow boundary, so a shadow tree is left untouched
++ * unless the agent adopts the rules into it. Someone who keeps the page colors
++ * and only changes the font still needs it.
++ */
+ export function needsPageAgent(settings) {
++    return !settings.DefaultBrowserColor || !settings.DefaultBrowserFont ||
++        !settings.ShowImage || !settings.ShowFlash;
++}
++
++/**
++ * Whether the agent also has to measure each element's own background. Only
++ * the color override paints elements, so a font-only override gets the agent
++ * without the cost of measuring the page.
++ */
++export function needsBackgroundProbe(settings) {
+     return !settings.DefaultBrowserColor;
+ }
+diff --git a/common/migration.js b/common/migration.js
+new file mode 100644
+index 0000000..2b48033
+--- /dev/null
++++ b/common/migration.js
+@@ -0,0 +1,98 @@
++/**
++ * Carries the settings of the Manifest V2 version over to storage.
++ *
++ * That version kept them in the background page's localStorage, which a service
++ * worker cannot read. An offscreen document can, so one is opened once to copy
++ * them across.
++ *
++ * "Once" means once it has worked. The document reports what it found - an
++ * empty object if there was nothing there - so a report and a failure to get
++ * one are different things, and only a report ends the migration. A creation
++ * that failed, an offscreen document already in use, or a report that never
++ * came leaves it to be tried again on the next browser start; marking it done
++ * in those cases would throw away the settings of everyone it happened to.
++ */
++
++const REPORT_TIMEOUT = 5000;
++
++/**
++ * Listens for the offscreen document's report.
++ *
++ * The listener has to be in place before the document is created, because it
++ * reports as soon as its script runs. `cancel()` is there for when the document
++ * never opens: without it the listener and its timer would sit in the service
++ * worker until the timeout ran out, keeping it awake for a report that cannot
++ * come. It resolves with what was reported, or null.
++ */
++function waitForReport(timeoutMs) {
++    let stop;
++    const promise = new Promise(function (resolve) {
++        function listener(request) {
++            if (request && request.action === 'legacySettings') {
++                stop(request.data);
++            }
++        }
++        const timer = setTimeout(function () {
++            stop(null);
++        }, timeoutMs);
++        chrome.runtime.onMessage.addListener(listener);
++        stop = function (value) {
++            clearTimeout(timer);
++            chrome.runtime.onMessage.removeListener(listener);
++            // Resolving an already resolved promise does nothing, which is what
++            // makes cancelling after a report harmless.
++            resolve(value);
++        };
++    });
++    return {promise: promise, cancel: function () {
++        stop(null);
++    }};
++}
++
++async function run(timeoutMs) {
++    const flag = await chrome.storage.local.get({legacyMigrationDone: false});
++    if (flag.legacyMigrationDone) {
++        return;
++    }
++    let legacy = null;
++    // Listening starts before the document exists: it reports as soon as its
++    // script runs, so there is no window in which the report could be missed.
++    const reported = waitForReport(timeoutMs);
++    try {
++        await chrome.offscreen.createDocument({
++            url: 'offscreen.html',
++            reasons: ['LOCAL_STORAGE'],
++            justification: 'Read settings saved by the previous Manifest V2 version.'
++        });
++        legacy = await reported.promise;
++    } catch (e) {
++        // No offscreen support, or the document already exists.
++    } finally {
++        reported.cancel();
++        try {
++            await chrome.offscreen.closeDocument();
++        } catch (e) {
++            // Never opened.
++        }
++    }
++
++    if (legacy === null || typeof legacy !== 'object') {
++        // Nothing was read. Leave the flag alone and try again another time.
++        return;
++    }
++    await chrome.storage.local.set(Object.assign({legacyMigrationDone: true}, legacy));
++}
++
++// One migration at a time: onInstalled and onStartup can both reach this, and
++// two offscreen documents cannot exist at once.
++let migrating = null;
++
++export function migrateLegacySettings(timeoutMs) {
++    if (!migrating) {
++        migrating = run(timeoutMs === undefined ? REPORT_TIMEOUT : timeoutMs)
++            .finally(function () {
++                migrating = null;
++            });
++    }
++    return migrating;
++}
+diff --git a/package.json b/package.json
+index d8ae82c..42f7809 100644
+--- a/package.json
++++ b/package.json
+@@ -1,10 +1,13 @@
+ {
+-	"name": "change-colors",
+-	"version": "3.0.0",
+-	"private": true,
+-	"description": "Chrome extension that restyles pages according to the user's preferences.",
+-	"type": "module",
+-	"scripts": {
+-		"test": "node test/css.test.mjs"
+-	}
++    "name": "change-colors",
++    "version": "3.0.0",
++    "private": true,
++    "description": "Chrome extension that restyles pages according to the user's preferences.",
++    "type": "module",
++    "scripts": {
++        "test": "node test/migration.test.mjs && node test/css.test.mjs && node test/integration.test.mjs",
++        "test:integration": "node test/integration.test.mjs",
++        "test:perf": "node test/perf.test.mjs",
++        "test:migration": "node test/migration.test.mjs"
++    }
+ }
+diff --git a/test/css.test.mjs b/test/css.test.mjs
+index 3039c33..409d970 100644
+--- a/test/css.test.mjs
++++ b/test/css.test.mjs
+@@ -17,6 +17,9 @@ const PORT = 8124;
+ const PAGE = `<!doctype html><html><head><style>
+ /* The kind of declaration that used to beat the extension. */
+ #stubborn { color: #0f0f0f !important; background-color: #ffffff !important; }
++/* The kind of rule that gives a descendant a background when an ancestor's
++   class changes - a theme switch, an expanded menu. */
++.dark #themed { background-color: #ffffff; }
+ </style></head><body style="background:#ffffff;color:#111">
+ <h1 id="h">hello</h1>
+ 
+@@ -41,6 +44,16 @@ const PAGE = `<!doctype html><html><head><style>
+ </div>
+ 
+ <div id="scrim" style="background:rgba(255,255,255,0.5)">translucent</div>
++<!-- Colors a site writes in a modern syntax: getComputedStyle gives them back
++     as oklch(), not as rgb(). -->
++<div id="modern" style="background: oklch(0.85 0.1 240)">modern color</div>
++<div id="modernScrim" style="background: oklch(0.85 0.1 240 / 0.4)">modern translucent</div>
++<div id="dynamic">dynamic background</div>
++
++<!-- A background a descendant only gets through an ancestor's class... -->
++<div id="theme"><div id="themed">themed</div></div>
++<!-- ...or through an inherited custom property. -->
++<div id="varHost" style="--surface: transparent"><div id="varChild" style="background: var(--surface)">var</div></div>
+ 
+ <img id="img" src="/hero.gif" width="200" height="120" />
+ <a id="a" href="https://example.com/">link</a>
+@@ -160,11 +173,8 @@ try {
+     // Without the agent everything is painted, which is what keeps a page
+     // readable when the agent cannot run.
+     check('without the agent, elements are painted', await bg('ripple'), DARK);
+-    // Media stays visible even in that fallback.
+-    check('video element transparent', await bg('v'), CLEAR);
+-    check('overlay above the video transparent', await bg('videoOverlay'), CLEAR);
+-    check('player container transparent', await bg('player'), CLEAR);
+-    check('great-grandparent of the video transparent', await bg('outer'), CLEAR);
++    // Media itself is never painted, even in that fallback.
++    check('video element is never painted', await bg('v'), CLEAR);
+ 
+     /* ------------------------------------------------------- with the agent */
+ 
+@@ -174,12 +184,26 @@ try {
+     await sleep(1000);
+ 
+     check('transparent overlay over a label is cleared', await bg('ripple'), CLEAR);
++    check('transparent overlay over a video is cleared', await bg('videoOverlay'), CLEAR);
++    check('video element stays unpainted', await bg('v'), CLEAR);
++    check('a player container with its own background keeps one', await bg('player'), DARK);
+     check('the label under it keeps its color', await color('entryLabel'), TEXT);
+     check('headline over a banner is cleared', await bg('heroText'), CLEAR);
+     check('element with a solid background keeps the chosen one', await bg('menu'), DARK);
+     check('translucent overlay is cleared', await bg('scrim'), CLEAR);
++    check('a solid background written as oklch() is kept, not cleared', await bg('modern'), DARK);
++    check('a translucent oklch() background is cleared', await bg('modernScrim'), CLEAR);
+     check('body keeps the chosen background', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), DARK);
+ 
++    // A change shortly after the initial scan must not be lost. This guards a
++    // previous throttle that skipped the mutation without retrying it later.
++    await evaluate(sessionId, 'document.getElementById("dynamic").style.backgroundColor = "#fff"');
++    await sleep(400);
++    check('a newly assigned inline background is remeasured', await bg('dynamic'), DARK);
++    await evaluate(sessionId, 'document.getElementById("dynamic").style.removeProperty("background-color")');
++    await sleep(400);
++    check('removing an inline background makes the element clear again', await bg('dynamic'), CLEAR);
++
+     // Dynamically added content is measured too.
+     await evaluate(sessionId, `(() => {
+         const el = document.createElement('div');
+@@ -208,14 +232,91 @@ try {
+     check('nested shadow tree is styled too',
+         await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), TEXT);
+ 
++    // Changes inside a shadow tree are invisible to an observer watching the
++    // document, so each root found is watched itself.
++    await evaluate(sessionId, `(() => {
++        const root = document.getElementById('widget').shadowRoot;
++        // Appended, not innerHTML +=, which would rebuild the nested host and
++        // take its shadow root with it.
++        const late = document.createElement('em');
++        late.id = 'shadowLate';
++        late.style.background = '#fff';
++        const lateClear = document.createElement('u');
++        lateClear.id = 'shadowLateClear';
++        root.appendChild(late);
++        root.appendChild(lateClear);
++    })()`);
++    await sleep(800);
++    check('content added later inside a shadow tree, with a background, is painted',
++        await evaluate(sessionId, 'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLate")).backgroundColor'), DARK);
++    check('content added later inside a shadow tree, without one, is cleared',
++        await evaluate(sessionId, 'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLateClear")).backgroundColor'), CLEAR);
++
++    /* ------------------------------------------- restyling from an ancestor */
++
++    check('a descendant with no background of its own starts cleared', await bg('themed'), CLEAR);
++    await evaluate(sessionId, 'document.getElementById("theme").className = "dark"');
++    await sleep(600);
++    check('a class on an ancestor is remeasured down the subtree', await bg('themed'), DARK);
++    await evaluate(sessionId, 'document.getElementById("theme").className = ""');
++    await sleep(600);
++    check('removing it clears the descendant again', await bg('themed'), CLEAR);
++
++    check('a descendant reading an empty custom property starts cleared', await bg('varChild'), CLEAR);
++    await evaluate(sessionId, 'document.getElementById("varHost").style.setProperty("--surface", "#ffffff")');
++    await sleep(600);
++    check('a custom property set on an ancestor is remeasured down the subtree', await bg('varChild'), DARK);
++
++    /* ------------------------------------------------- more than one flush */
++
++    // A subtree bigger than one flush's budget must be finished by the next
++    // flush, not dropped: the last elements of a big page are exactly the ones
++    // a "measure the first few thousand" implementation lost.
++    await evaluate(sessionId, `(() => {
++        const big = document.createElement('div');
++        big.id = 'big';
++        const parts = [];
++        for (let i = 0; i < 9000; i++) {
++            parts.push('<div id="big' + i + '"' +
++                (i % 2 ? ' style="background:#fff"' : '') + '>x</div>');
++        }
++        big.innerHTML = parts.join('');
++        document.body.appendChild(big);
++    })()`);
++    await sleep(3000);
++    check('an element past the first flush, with a background, is painted', await bg('big8999'), DARK);
++    check('an element past the first flush, without one, is cleared', await bg('big8998'), CLEAR);
++    check('every element of a 9000 element subtree was measured', await evaluate(sessionId,
++        'document.querySelectorAll("#big > div[data-changecolors-clear]").length'), 4500);
++    await evaluate(sessionId, 'document.getElementById("big").remove()');
++
+     /* ---------------------------------------------------------- turning off */
+ 
+     await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
+     check('stopping the agent removes its attributes', await evaluate(sessionId,
+         'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
++    check('stopping the agent removes them inside shadow trees too', await evaluate(sessionId,
++        'document.getElementById("widget").shadowRoot.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
+     check('stopping the agent restores shadow tree colors',
+         await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
+ 
++    /* ------------------------------------------- stopping right after starting */
++
++    // The agent rescans the page 500ms, 2s and 5s in, to find shadow roots
++    // attached after the first pass. Those must not come back to life after the
++    // override is switched off - the page can have been handed to another agent
++    // by then.
++    await evaluate(sessionId, agentSource);
++    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
++    await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
++    await sleep(6000);
++    check('an agent stopped before its delayed rescans stays stopped', await evaluate(sessionId,
++        'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
++    check('and leaves no stylesheet in a shadow tree behind',
++        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
++    check('and none in a nested one either',
++        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), 'rgb(15, 15, 15)');
++
+     /* -------------------------------------------------------- hiding images */
+ 
+     const hidden = buildCss(Object.assign({}, DEFAULTS, {ShowImage: false}));
+diff --git a/test/integration.test.mjs b/test/integration.test.mjs
+new file mode 100644
+index 0000000..bfcbcd9
+--- /dev/null
++++ b/test/integration.test.mjs
+@@ -0,0 +1,418 @@
++// Loads the real extension in Chrome and drives it the way a user does.
++//
++// The unit-level test injects the stylesheet and agent.js into a page itself,
++// so it never exercises the service worker: the stylesheet a tab already has,
++// navigations, sub frames and the storage writes the options page makes on
++// every `input` event are all its business, and that is where a tab can end up
++// with a stylesheet nothing is able to remove any more.
++import {spawn} from 'node:child_process';
++import http from 'node:http';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import {fileURLToPath} from 'node:url';
++
++const PORT = 8127;
++const EXTENSION = fileURLToPath(new URL('..', import.meta.url));
++
++/**
++ * Branded Google Chrome refuses `--load-extension`, so this test needs a
++ * Chromium build: $CHROME_UNBRANDED, or one of the browsers Playwright and
++ * Puppeteer download into the user's cache.
++ */
++function findBrowser() {
++    const candidates = [];
++    if (process.env.CHROME_UNBRANDED) {
++        candidates.push(process.env.CHROME_UNBRANDED);
++    }
++    const caches = [
++        process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright'),
++        path.join(os.homedir(), '.cache', 'ms-playwright'),
++        path.join(os.homedir(), '.cache', 'puppeteer')
++    ].filter(Boolean);
++    for (const cache of caches) {
++        let entries = [];
++        try {
++            entries = fs.readdirSync(cache).sort().reverse();
++        } catch (e) {
++            continue;
++        }
++        for (const entry of entries) {
++            if (!/^chrom/.test(entry) || /headless_shell/.test(entry)) {
++                continue;
++            }
++            for (const inner of ['chrome-win64', 'chrome-win', 'chrome-linux', 'chrome-mac']) {
++                for (const binary of ['chrome.exe', 'chrome', 'Chromium.app/Contents/MacOS/Chromium']) {
++                    candidates.push(path.join(cache, entry, inner, binary));
++                }
++            }
++        }
++    }
++    return candidates.find(candidate => fs.existsSync(candidate)) || null;
++}
++
++const CHROME = findBrowser();
++if (!CHROME) {
++    console.log('SKIP  integration test: no Chromium that accepts --load-extension was found.');
++    console.log('      Point $CHROME_UNBRANDED at one, or run `npx playwright install chromium`.');
++    process.exit(0);
++}
++
++const FRAME = `<!doctype html><html><body style="background:#ffffff;color:#111">
++<p id="p">framed</p>
++<div id="frameOverlay" style="position:absolute;inset:0"></div>
++</body></html>`;
++
++const PAGE = `<!doctype html><html><body style="background:#ffffff;color:#111">
++<h1 id="h">page</h1>
++<div id="solid" style="background:#ffffff">solid</div>
++<div id="overlay" style="position:absolute;inset:0"></div>
++<iframe id="f" src="/frame" width="300" height="120"></iframe>
++<div id="widget"></div>
++<script>
++  const root = document.getElementById('widget').attachShadow({mode: 'open'});
++  root.innerHTML = '<style>span{color:#0f0f0f;background:#fff;font-family:Times}</style>' +
++      '<span id="shadowText">sidebar entry</span>';
++</script>
++</body></html>`;
++
++// A document with more elements than one flush of the agent measures.
++const BIG = `<!doctype html><html><body style="background:#ffffff;color:#111">
++<div id="big"></div>
++<script>
++  const parts = [];
++  for (let i = 0; i < 9000; i++) {
++    parts.push('<div id="big' + i + '"' + (i % 2 ? ' style="background:#fff"' : '') + '>x</div>');
++  }
++  document.getElementById('big').innerHTML = parts.join('');
++</script>
++</body></html>`;
++
++// A document that replaces itself as soon as it has committed. The extension
++// sees a commit for it and starts working on it, and by the time that work runs
++// the frame holds another document.
++const REDIRECT = `<!doctype html><html><body style="background:#ffffff;color:#111">
++<script>location.replace('/plain');</script>
++</body></html>`;
++
++const PLAIN = `<!doctype html><html><body style="background:#ffffff;color:#111">
++<p id="p">plain</p>
++</body></html>`;
++
++const server = http.createServer((req, res) => {
++    const body = req.url.startsWith('/frame') ? FRAME :
++        req.url.startsWith('/big') ? BIG :
++        req.url.startsWith('/redirect') ? REDIRECT :
++        req.url.startsWith('/plain') ? PLAIN : PAGE;
++    res.writeHead(200, {'Content-Type': 'text/html'});
++    res.end(body);
++}).listen(PORT);
++
++const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-int-'));
++const chrome = spawn(CHROME, [
++    '--headless=new',
++    '--remote-debugging-pipe',
++    `--user-data-dir=${profile}`,
++    `--disable-extensions-except=${EXTENSION}`,
++    `--load-extension=${EXTENSION}`,
++    '--no-first-run',
++    '--no-default-browser-check',
++    `http://localhost:${PORT}/`
++], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
++
++let nextId = 0;
++const pending = new Map();
++let buffer = Buffer.alloc(0);
++chrome.stdio[4].on('data', chunk => {
++    buffer = Buffer.concat([buffer, chunk]);
++    let end;
++    while ((end = buffer.indexOf(0)) !== -1) {
++        const raw = buffer.subarray(0, end).toString();
++        buffer = buffer.subarray(end + 1);
++        const msg = JSON.parse(raw);
++        if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
++    }
++});
++function send(method, params = {}, sessionId) {
++    const id = ++nextId;
++    const m = {id, method, params};
++    if (sessionId) m.sessionId = sessionId;
++    chrome.stdio[3].write(JSON.stringify(m) + '\0');
++    return new Promise(r => pending.set(id, r));
++}
++const sleep = ms => new Promise(r => setTimeout(r, ms));
++
++async function evaluate(sessionId, expression) {
++    const r = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true}, sessionId);
++    if (r.result.exceptionDetails) {
++        throw new Error(JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300));
++    }
++    return r.result.result.value;
++}
++
++async function findTarget(match) {
++    for (let i = 0; i < 40; i++) {
++        const t = await send('Target.getTargets');
++        const found = (t.result.targetInfos || []).find(match);
++        if (found) return found;
++        await sleep(500);
++    }
++    return null;
++}
++
++async function attach(target) {
++    const {result: {sessionId}} = await send('Target.attachToTarget', {targetId: target.targetId, flatten: true});
++    await send('Runtime.enable', {}, sessionId);
++    return sessionId;
++}
++
++const results = [];
++function check(name, actual, expected) {
++    const ok = actual === expected;
++    results.push(ok);
++    console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (ok ? '' : `  -> got ${actual}, expected ${expected}`));
++}
++
++const WHITE = 'rgb(255, 255, 255)';
++const DARK = 'rgb(8, 8, 8)';
++const CLEAR = 'rgba(0, 0, 0, 0)';
++const TEXT = 'rgb(232, 232, 232)';
++
++try {
++    await sleep(3000);
++    const worker = await findTarget(x => x.type === 'service_worker' && x.url.endsWith('/background.js'));
++    if (!worker) {
++        const t = await send('Target.getTargets');
++        throw new Error('the extension service worker never showed up: ' +
++            (t.result.targetInfos || []).map(x => x.type + ' ' + x.url).join(' | '));
++    }
++    const workerSession = await attach(worker);
++
++    // Everything the popup and the options page do is a write to storage.
++    const settings = patch => evaluate(workerSession,
++        `chrome.storage.local.set(${JSON.stringify(patch)})`);
++
++    // The extension's own view of which document a tab is holding. A document
++    // restored from the back/forward cache keeps the id it had, which is what
++    // lets work recorded for it still apply.
++    const topDocumentId = () => evaluate(workerSession, `(async () => {
++        const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
++        const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
++        const top = frames.find(frame => frame.frameId === 0);
++        return top ? top.documentId : null;
++    })()`);
++
++    const pageTarget = await findTarget(x => x.type === 'page' && x.url.startsWith('http://localhost'));
++    let sessionId = await attach(pageTarget);
++    const bg = expression => evaluate(sessionId, `getComputedStyle(${expression}).backgroundColor`);
++    const FRAME_DOC = "document.getElementById('f').contentDocument";
++    const frameBg = id => bg(`${FRAME_DOC}.getElementById(${JSON.stringify(id)})`);
++    const frameBodyBg = () => bg(`${FRAME_DOC}.body`);
++
++    check('page starts unstyled', await bg('document.body'), WHITE);
++
++    await settings({OverrideAll: true});
++    await sleep(1500);
++    check('turning the override on styles the open page', await bg('document.body'), DARK);
++    check('and the elements inside it', await bg('document.getElementById("solid")'), DARK);
++    check('and clears what has no background of its own',
++        await bg('document.getElementById("overlay")'), CLEAR);
++    check('and the sub frame', await frameBodyBg(), DARK);
++
++    /* ------------------------------------------------- navigating with a frame */
++
++    await evaluate(sessionId, 'location.href = "/?second"');
++    await sleep(2500);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('second')));
++    check('a new document is styled', await bg('document.body'), DARK);
++    check('its sub frame is styled too', await frameBodyBg(), DARK);
++    check('the sub frame is measured as well', await frameBg('frameOverlay'), CLEAR);
++
++    /* --------------------------------------------------- rapid storage writes */
++
++    // The options page writes on every `input` event: dragging a color picker
++    // sends a burst like this one. Each write makes the worker swap the tab's
++    // stylesheet for a new one, and a swap that overlaps with the next leaves a
++    // stylesheet behind that can never be removed again.
++    await evaluate(workerSession, `(async () => {
++        for (let i = 0; i < 40; i++) {
++            chrome.storage.local.set({background_color: (0x101010 + i * 0x010101).toString(16)});
++        }
++        await chrome.storage.local.set({background_color: '112233'});
++    })()`);
++    await sleep(3000);
++    check('the last color of a burst of writes is the one that applies',
++        await bg('document.body'), 'rgb(17, 34, 51)');
++
++    await settings({OverrideAll: false});
++    await sleep(2000);
++    check('turning the override off leaves no stylesheet behind',
++        await bg('document.body'), WHITE);
++    check('and none in the sub frame either', await frameBodyBg(), WHITE);
++
++    /* ------------------------------------------- a document larger than a flush */
++
++    await settings({OverrideAll: true, background_color: '080808'});
++    await sleep(500);
++    await evaluate(sessionId, 'location.href = "/big"');
++    await sleep(4000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/big')));
++    check('the far end of a 9000 element document is painted',
++        await bg('document.getElementById("big8999")'), DARK);
++    check('the far end of a 9000 element document is measured',
++        await bg('document.getElementById("big8998")'), CLEAR);
++
++    /* ----------------------------------------------------- a font-only override */
++
++    // No color override: the stylesheet only changes the font, and shadow trees
++    // still need the agent to carry it across the boundary.
++    await evaluate(sessionId, 'location.href = "/?fonts"');
++    await sleep(1000);
++    await settings({DefaultBrowserColor: true, DefaultBrowserFont: false, OverrideFontName: 'Georgia'});
++    await sleep(2500);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('fonts')));
++    check('a font-only override keeps the page colors',
++        await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
++    check('a font-only override reaches into a shadow tree', await evaluate(sessionId,
++        'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowText")).fontFamily'),
++        'Georgia, sans-serif');
++
++    await settings({DefaultBrowserColor: false});
++    await sleep(2000);
++    check('the color override comes back on the same page',
++        await evaluate(sessionId, 'getComputedStyle(document.body).color'), TEXT);
++
++    /* ---------------------------------------- a document replaced right away */
++
++    // The frame keeps its id across the redirect, so work queued for the first
++    // document must not land in the one that replaced it - which is excluded
++    // from the override and has to stay the way the site wrote it. The storage
++    // write fires at the same time, queueing a sync that still carries the old
++    // URL.
++    await settings({
++        OverrideAll: true,
++        DefaultBrowserFont: true,
++        NotOverridenPages: [`http://localhost:${PORT}/plain`]
++    });
++    await sleep(1000);
++    await evaluate(sessionId, 'location.href = "/redirect"');
++    await settings({background_color: '445566'});
++    await sleep(4000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
++    check('a document that replaced another is left alone if it is excluded',
++        await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
++    check('and its elements too',
++        await evaluate(sessionId, 'getComputedStyle(document.getElementById("p")).backgroundColor'), CLEAR);
++
++    /* ------------------------------------------ back into a restored document */
++
++    // A document coming back from the back/forward cache commits again with the
++    // id it already had, and it still holds the stylesheet it was left with. It
++    // is not a new document: what it has to be given is the difference, and
++    // what it was left with has to stay removable - a stylesheet forgotten
++    // while it is still in a page is one nothing can take out again.
++    await settings({OverrideAll: true, NotOverridenPages: [], background_color: '080808'});
++    await sleep(1500);
++    await evaluate(sessionId, 'location.href = "/?cached"');
++    await sleep(2500);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
++    check('the page to be cached is styled', await bg('document.body'), DARK);
++    await evaluate(sessionId, 'window.__cacheMarker = 1');
++    const documentBefore = await topDocumentId();
++
++    await evaluate(sessionId, 'location.href = "/plain"');
++    await sleep(2000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
++    // The colors change while the page sits in the cache.
++    await settings({background_color: '223344'});
++    await sleep(1500);
++    await evaluate(sessionId, 'history.back()');
++    await sleep(3000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('cached')));
++    // Everything below is about a *restored* document. A browser that reloaded
++    // the page instead would pass the colour checks without ever exercising
++    // that path, so this is asserted rather than reported.
++    check('the document really came back from the back/forward cache',
++        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
++    check('and came back as the same document',
++        await topDocumentId(), documentBefore);
++    check('a document coming back gets the colors chosen while it was away',
++        await bg('document.body'), 'rgb(34, 51, 68)');
++
++    await settings({OverrideAll: false});
++    await sleep(2000);
++    check('and the stylesheet it was left with is still removable',
++        await bg('document.body'), WHITE);
++
++    /* ------------------ back into a restored document with the override off */
++
++    // Turning the override off while a page sits in the cache has to reach that
++    // page when it comes back: the stylesheet in it, the one in its sub frame,
++    // and the agent it was left running, which is what styles its shadow trees.
++    const shadowColor = () => evaluate(sessionId,
++        'getComputedStyle(document.getElementById("widget").shadowRoot' +
++        '.getElementById("shadowText")).color');
++
++    await settings({OverrideAll: true, background_color: '080808'});
++    await sleep(1500);
++    await evaluate(sessionId, 'location.href = "/?agent"');
++    await sleep(3000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('agent')));
++    check('the page about to be cached is styled', await bg('document.body'), DARK);
++    check('its sub frame is styled', await frameBodyBg(), DARK);
++    check('its shadow tree is styled', await shadowColor(), TEXT);
++    await evaluate(sessionId, 'window.__cacheMarker = 1');
++
++    await evaluate(sessionId, 'location.href = "/plain"');
++    await sleep(2000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/plain')));
++    await settings({OverrideAll: false});
++    await sleep(1500);
++    await evaluate(sessionId, 'history.back()');
++    await sleep(3000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('agent')));
++    check('the document with the sub frame came back from the cache',
++        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
++    check('a restored document loses the stylesheet it was left with',
++        await bg('document.body'), WHITE);
++    check('its sub frame loses its stylesheet too', await frameBodyBg(), WHITE);
++    check('and its shadow tree goes back to the site colors',
++        await shadowColor(), 'rgb(15, 15, 15)');
++
++    /* ------------- a page the extension does not touch, and back to a cached one */
++
++    // Moving to a page the extension leaves alone must not make it forget the
++    // stylesheets it put in the pages behind it. Their text is the only thing
++    // that can take them out again.
++    await settings({OverrideAll: true, background_color: '080808'});
++    await sleep(1500);
++    await evaluate(sessionId, 'location.href = "/?ignored"');
++    await sleep(3000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('ignored')));
++    check('the page behind the untouched one is styled', await bg('document.body'), DARK);
++    await evaluate(sessionId, 'window.__cacheMarker = 1');
++
++    await evaluate(sessionId, 'location.href = "about:blank"');
++    await sleep(2500);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url === 'about:blank'));
++    await settings({background_color: '445566'});
++    await sleep(1500);
++    await evaluate(sessionId, 'history.back()');
++    await sleep(3000);
++    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('ignored')));
++    check('the document behind the untouched page came back from the cache',
++        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
++    await settings({OverrideAll: false});
++    await sleep(2000);
++    check('and the stylesheet it was left with survived the detour, and comes out',
++        await bg('document.body'), WHITE);
++} catch (e) {
++    console.log('FAIL  integration run -> ' + e);
++    results.push(false);
++} finally {
++    chrome.kill();
++    server.close();
++    const passed = results.filter(Boolean).length;
++    console.log(`\n${passed}/${results.length} checks passed`);
++    process.exit(passed === results.length ? 0 : 1);
++}
+diff --git a/test/migration.test.mjs b/test/migration.test.mjs
+new file mode 100644
+index 0000000..c1202d9
+--- /dev/null
++++ b/test/migration.test.mjs
+@@ -0,0 +1,137 @@
++// Checks that the settings of the Manifest V2 version survive a migration that
++// goes wrong.
++//
++// The failure this guards against loses user data silently: marking the
++// migration done when nothing was actually read leaves the old settings in a
++// localStorage nothing will look at again. Only a report from the offscreen
++// document - even an empty one - may end it.
++//
++// The chrome APIs the migration uses are stubbed, so this runs in node alone.
++
++const results = [];
++function check(name, actual, expected) {
++    const ok = JSON.stringify(actual) === JSON.stringify(expected);
++    results.push(ok);
++    console.log((ok ? 'PASS  ' : 'FAIL  ') + name +
++        (ok ? '' : `  -> got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`));
++}
++
++/**
++ * A stub of the parts of chrome the migration touches.
++ * `report` says what the offscreen document does once it is created: an object
++ * to report, or null to stay silent.
++ */
++function stubChrome({stored = {}, createFails = false, report = null} = {}) {
++    const listeners = new Set();
++    const calls = {created: 0, closed: 0};
++    globalThis.chrome = {
++        storage: {
++            local: {
++                async get(defaults) {
++                    const out = {};
++                    for (const [key, value] of Object.entries(defaults)) {
++                        out[key] = key in stored ? stored[key] : value;
++                    }
++                    return out;
++                },
++                async set(patch) {
++                    Object.assign(stored, patch);
++                }
++            }
++        },
++        runtime: {
++            onMessage: {
++                addListener: listener => listeners.add(listener),
++                removeListener: listener => listeners.delete(listener)
++            }
++        },
++        offscreen: {
++            async createDocument() {
++                calls.created++;
++                if (createFails) {
++                    throw new Error('Only a single offscreen document may be created.');
++                }
++                if (report !== null) {
++                    // The real document reports as soon as its script runs.
++                    setTimeout(() => {
++                        for (const listener of Array.from(listeners)) {
++                            listener({action: 'legacySettings', data: report});
++                        }
++                    }, 5);
++                }
++            },
++            async closeDocument() {
++                calls.closed++;
++            }
++        }
++    };
++    return {stored, calls, listeners};
++}
++
++// Imported once; the module keeps the "one migration at a time" promise.
++const {migrateLegacySettings} = await import('../common/migration.js');
++const TIMEOUT = 60;
++
++/* ------------------------------------------------ the document never opens */
++
++let env = stubChrome({createFails: true, stored: {}});
++await migrateLegacySettings(TIMEOUT);
++check('a migration that could not open a document is not marked done',
++    env.stored.legacyMigrationDone, undefined);
++check('and nothing was written', Object.keys(env.stored), []);
++check('the document is closed even so', env.calls.closed, 1);
++check('and its listener is gone', env.listeners.size, 0);
++
++/* -------------------------------------------------- the report never comes */
++
++env = stubChrome({report: null, stored: {}});
++await migrateLegacySettings(TIMEOUT);
++check('a migration whose report never came is not marked done',
++    env.stored.legacyMigrationDone, undefined);
++check('and nothing was written either', Object.keys(env.stored), []);
++check('the listener is cleaned up after the timeout', env.listeners.size, 0);
++
++/* ------------------------------------------------------- the retry that works */
++
++env = stubChrome({report: {background_color: '112233', OverrideAll: true}, stored: {}});
++await migrateLegacySettings(TIMEOUT);
++check('the retry carries the old settings over', env.stored.background_color, '112233');
++check('and the rest of them', env.stored.OverrideAll, true);
++check('and marks the migration done', env.stored.legacyMigrationDone, true);
++
++/* ------------------------------------------- nothing to migrate is still done */
++
++env = stubChrome({report: {}, stored: {}});
++await migrateLegacySettings(TIMEOUT);
++check('finding nothing to migrate counts as done', env.stored.legacyMigrationDone, true);
++
++/* --------------------------------------------------------- already migrated */
++
++env = stubChrome({report: {background_color: 'ffffff'}, stored: {legacyMigrationDone: true}});
++await migrateLegacySettings(TIMEOUT);
++check('a migration already done opens no document', env.calls.created, 0);
++check('and does not overwrite current settings', env.stored.background_color, undefined);
++
++/* ------------------------------------------------------ two callers at once */
++
++// onInstalled and onStartup can both reach this, and two offscreen documents
++// cannot exist at once.
++env = stubChrome({report: {background_color: '445566'}, stored: {}});
++await Promise.all([migrateLegacySettings(TIMEOUT), migrateLegacySettings(TIMEOUT)]);
++check('two callers at once open one document', env.calls.created, 1);
++check('and the settings still come across', env.stored.background_color, '445566');
++
++/* ---------------------------------------------- a later call after a failure */
++
++env = stubChrome({createFails: true, stored: {}});
++await migrateLegacySettings(TIMEOUT);
++env.calls.createFails = false;
++const retry = stubChrome({report: {text_color: 'aabbcc'}, stored: {}});
++await migrateLegacySettings(TIMEOUT);
++check('a failed migration can be run again', retry.calls.created, 1);
++check('and the second attempt carries the settings over', retry.stored.text_color, 'aabbcc');
++check('and marks it done', retry.stored.legacyMigrationDone, true);
++
++const passed = results.filter(Boolean).length;
++console.log(`\n${passed}/${results.length} checks passed`);
++process.exit(passed === results.length ? 0 : 1);
+diff --git a/test/perf.test.mjs b/test/perf.test.mjs
+new file mode 100644
+index 0000000..97eb553
+--- /dev/null
++++ b/test/perf.test.mjs
+@@ -0,0 +1,176 @@
++// Guards the cost of the styling on a busy page.
++//
++// A selector can be correct and still be unusable: a `:has()` chain walking up
++// from every <video> once made Chrome spend two hundred times longer
++// recalculating styles on a page with a live chat, which is what made sites
++// like Twitch feel sluggish. This measures the browser's own style
++// recalculation time with and without the extension, on a page shaped like one:
++// a chat appending and dropping nodes, a container flipping classes the way a
++// player shows its controls, and an inline style changing every frame.
++import {spawn} from 'node:child_process';
++import http from 'node:http';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import {fileURLToPath} from 'node:url';
++import {DEFAULTS} from '../common/settings.js';
++import {buildCss, buildShadowCss} from '../common/css.js';
++
++const CHROME = process.env.CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
++const PORT = 8126;
++const WINDOW = 6000;
++// The regression this guards against was measured in seconds, not milliseconds.
++const MAX_EXTRA_RECALC_SECONDS = 1;
++// The agent's own work - observer callbacks, walking the DOM, thousands of
++// getComputedStyle() calls - is not style recalculation and would not show up
++// in the metric above.
++const MAX_EXTRA_SCRIPT_SECONDS = 1.5;
++
++const PAGE = `<!doctype html><html><head><style>
++body { background:#fff; color:#111; font: 13px sans-serif; margin:0 }
++.panel { background:#f5f5f5; padding:8px }
++.msg { padding:2px 6px }
++.msg .name { color:#6441a5; font-weight:bold }
++.overlay { position:absolute; inset:0 }
++.player { position:relative; width:640px; height:360px; background:#000 }
++.hovered .controls { opacity:1 }
++.controls { position:absolute; bottom:0; left:0; right:0; height:40px }
++.card { background:#fff; border:1px solid #ddd; margin:4px; padding:6px }
++</style></head><body>
++<div id="app">
++  <div id="player" class="player">
++    <video id="v" width="640" height="360"></video>
++    <div class="overlay" id="overlay"></div>
++    <div class="controls"><div id="volume" style="width:50px;height:8px;background:#999"></div></div>
++  </div>
++  <div id="grid"></div>
++  <div class="panel"><div id="chat"></div></div>
++</div>
++<script>
++  const grid = document.getElementById('grid');
++  for (let i = 0; i < 300; i++) {
++    const card = document.createElement('div');
++    card.className = 'card';
++    card.innerHTML = '<span class="name">streamer ' + i + '</span><span> is live</span>';
++    grid.appendChild(card);
++  }
++  const chat = document.getElementById('chat');
++  const player = document.getElementById('player');
++  const app = document.getElementById('app');
++  const volume = document.getElementById('volume');
++  let n = 0;
++  setInterval(() => {
++    for (let i = 0; i < 3; i++) {
++      const line = document.createElement('div');
++      line.className = 'msg';
++      line.innerHTML = '<span class="name">user' + (n % 50) + '</span><span>: message ' + (n++) + '</span>';
++      chat.appendChild(line);
++    }
++    while (chat.children.length > 120) chat.removeChild(chat.firstChild);
++  }, 50);
++  setInterval(() => { player.classList.toggle('hovered'); app.classList.toggle('active'); }, 100);
++  let w = 0;
++  const tick = () => { volume.style.width = (30 + (w++ % 60)) + 'px'; requestAnimationFrame(tick); };
++  tick();
++</script>
++</body></html>`;
++
++const server = http.createServer((req, res) => {
++    res.writeHead(200, {'Content-Type': 'text/html'});
++    res.end(PAGE);
++}).listen(PORT);
++
++const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-perf-'));
++const chrome = spawn(CHROME, [
++    '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
++    '--window-size=1280,900', '--hide-scrollbars',
++    '--no-first-run', '--no-default-browser-check', `http://localhost:${PORT}/`
++], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
++
++let nextId = 0;
++const pending = new Map();
++let buffer = Buffer.alloc(0);
++chrome.stdio[4].on('data', chunk => {
++    buffer = Buffer.concat([buffer, chunk]);
++    let end;
++    while ((end = buffer.indexOf(0)) !== -1) {
++        const raw = buffer.subarray(0, end).toString();
++        buffer = buffer.subarray(end + 1);
++        const msg = JSON.parse(raw);
++        if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
++    }
++});
++function send(method, params = {}, sessionId) {
++    const id = ++nextId;
++    const m = {id, method, params};
++    if (sessionId) m.sessionId = sessionId;
++    chrome.stdio[3].write(JSON.stringify(m) + '\0');
++    return new Promise(r => pending.set(id, r));
++}
++const sleep = ms => new Promise(r => setTimeout(r, ms));
++async function evaluate(sessionId, expression) {
++    const r = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true}, sessionId);
++    if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300));
++    return r.result.result.value;
++}
++async function costSeconds(sessionId) {
++    const r = await send('Performance.getMetrics', {}, sessionId);
++    const value = name => r.result.metrics.find(m => m.name === name).value;
++    return {recalc: value('RecalcStyleDuration'), script: value('ScriptDuration')};
++}
++
++let failed = false;
++try {
++    await sleep(2500);
++    let page = null;
++    for (let i = 0; i < 30 && !page; i++) {
++        const t = await send('Target.getTargets');
++        page = (t.result.targetInfos || []).find(x => x.type === 'page' && x.url.startsWith('http://localhost'));
++        if (!page) await sleep(400);
++    }
++    const {result: {sessionId}} = await send('Target.attachToTarget', {targetId: page.targetId, flatten: true});
++    await send('Runtime.enable', {}, sessionId);
++    await send('Performance.enable', {}, sessionId);
++    await sleep(2000);
++
++    const baseStart = await costSeconds(sessionId);
++    await sleep(WINDOW);
++    const baseEnd = await costSeconds(sessionId);
++
++    await evaluate(sessionId, `(() => {
++        const s = document.createElement('style');
++        s.textContent = ${JSON.stringify(buildCss(DEFAULTS))};
++        document.documentElement.appendChild(s);
++    })()`);
++    await evaluate(sessionId, fs.readFileSync(fileURLToPath(new URL('../agent.js', import.meta.url)), 'utf8'));
++    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(DEFAULTS))})`);
++    await sleep(2000);
++
++    const styledStart = await costSeconds(sessionId);
++    await sleep(WINDOW);
++    const styledEnd = await costSeconds(sessionId);
++
++    const results = [];
++    function report(what, baseline, styled, budget) {
++        const extra = styled - baseline;
++        console.log(`${what} over ${WINDOW / 1000}s: ` +
++            `${baseline.toFixed(3)}s without the extension, ${styled.toFixed(3)}s with it ` +
++            `(+${extra.toFixed(3)}s)`);
++        const ok = extra < budget;
++        results.push(ok);
++        console.log((ok ? 'PASS  ' : 'FAIL  ') +
++            `extra ${what} stays under ${budget}s`);
++    }
++    report('style recalculation', baseEnd.recalc - baseStart.recalc,
++        styledEnd.recalc - styledStart.recalc, MAX_EXTRA_RECALC_SECONDS);
++    report('script time', baseEnd.script - baseStart.script,
++        styledEnd.script - styledStart.script, MAX_EXTRA_SCRIPT_SECONDS);
++    failed = results.includes(false);
++} catch (e) {
++    console.log('FAIL  perf run -> ' + e);
++    failed = true;
++} finally {
++    chrome.kill();
++    server.close();
++    process.exit(failed ? 1 : 0);
++}

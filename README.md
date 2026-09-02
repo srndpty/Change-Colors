@@ -53,15 +53,27 @@ runs on Manifest V3, with the same features and the same settings.
   left with stays removable - including when the override was turned off while it
   was away, which also has to stop the agent it was left running.
 - A restored page brings its sub frames back already loaded. They commit nothing,
-  and `webNavigation.getAllFrames` does not list them, so the record keeps which
-  page each document belonged to: that is the only way left to reach them.
+  and `webNavigation.getAllFrames` does not list them - not even seconds later -
+  so the record keeps which page each document belongs to, independently of
+  whether anything is currently in it. That is the only way left to reach them,
+  and it is what lets a settings change while a restored page is on screen still
+  find its sub frames.
 - Moving to a page the extension does not touch no longer makes it forget the
   stylesheets it put in the pages behind it. Their text is the only thing that
   can take them out again, so it is kept until the tab closes.
-- One decision per page. A sub frame applies what the top document decided
-  instead of reading the settings again, which could have moved on since.
+- One decision per page, and a tab holds more than one page: the page on screen,
+  whatever the back/forward cache is keeping, and any page being prerendered.
+  Decisions are kept per page, and a sub frame applies its own page's rather than
+  reading settings that may have moved on since.
+- A page's top frame is found through `frameType`, not `frameId === 0`. A
+  prerendered page's own top frame has a non-zero id, so it used to be read as a
+  sub frame of the page on screen and given that page's styling. Frame lists are
+  also walked down from one page's top document, because while a page replaces
+  another both are in the list at once.
 - Settings from version 2.x are only marked as migrated once they have actually
-  been read. An offscreen document that could not be created, or that did not
+  been read, and a late migration only fills in what has never been set here:
+  the retry that exists so a failed migration does not lose the old settings must
+  not overwrite the new ones. An offscreen document that could not be created, or that did not
   report in time, used to count as "migration done" and lose the old settings for
   good; it is now retried on the next browser start. Finding nothing to migrate
   still counts as done.

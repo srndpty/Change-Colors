@@ -63,6 +63,20 @@ const FRAME = `<!doctype html><html><body style="background:#ffffff;color:#111">
 <div id="frameOverlay" style="position:absolute;inset:0"></div>
 </body></html>`;
 
+// A page that asks the browser to prerender another one. The prerendered page
+// is a page of its own inside the same tab, with its own top level frame.
+const SPECULATE = `<!doctype html><html><body style="background:#ffffff;color:#111">
+<h1 id="h">speculating</h1>
+<script type="speculationrules">
+{"prerender": [{"urls": ["/prerendered"]}]}
+</script>
+</body></html>`;
+
+const PRERENDERED = `<!doctype html><html><body style="background:#ffffff;color:#111">
+<h1 id="h">prerendered</h1>
+<iframe id="f" src="/frame" width="300" height="120"></iframe>
+</body></html>`;
+
 const PAGE = `<!doctype html><html><body style="background:#ffffff;color:#111">
 <h1 id="h">page</h1>
 <div id="solid" style="background:#ffffff">solid</div>
@@ -103,7 +117,9 @@ const server = http.createServer((req, res) => {
     const body = req.url.startsWith('/frame') ? FRAME :
         req.url.startsWith('/big') ? BIG :
         req.url.startsWith('/redirect') ? REDIRECT :
-        req.url.startsWith('/plain') ? PLAIN : PAGE;
+        req.url.startsWith('/plain') ? PLAIN :
+        req.url.startsWith('/speculate') ? SPECULATE :
+        req.url.startsWith('/prerendered') ? PRERENDERED : PAGE;
     res.writeHead(200, {'Content-Type': 'text/html'});
     res.end(body);
 }).listen(PORT);
@@ -168,7 +184,9 @@ async function attach(target) {
 
 const results = [];
 function check(name, actual, expected) {
-    const ok = actual === expected;
+    const ok = Array.isArray(expected)
+        ? JSON.stringify(actual) === JSON.stringify(expected)
+        : actual === expected;
     results.push(ok);
     console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (ok ? '' : `  -> got ${actual}, expected ${expected}`));
 }
@@ -379,6 +397,29 @@ try {
     check('and its shadow tree goes back to the site colors',
         await shadowColor(), 'rgb(15, 15, 15)');
 
+    /* ------------------------- settings changes on a page that was restored */
+
+    // Everything below happens on the restored page, with no navigation of any
+    // kind: nothing commits, and the frame tree still does not list the sub
+    // frame it came back with. A resync has to find it the same way the restore
+    // did, or the page goes on with a stylesheet nothing is taking care of any
+    // more.
+    await settings({OverrideAll: true, background_color: '080808'});
+    await sleep(2000);
+    check('the override comes back on a restored page', await bg('document.body'), DARK);
+    check('and on the sub frame it came back with', await frameBodyBg(), DARK);
+    check('and in its shadow tree', await shadowColor(), TEXT);
+
+    await settings({background_color: '223344'});
+    await sleep(2000);
+    check('a color change reaches the restored page', await bg('document.body'), 'rgb(34, 51, 68)');
+    check('and its sub frame', await frameBodyBg(), 'rgb(34, 51, 68)');
+
+    await settings({OverrideAll: false});
+    await sleep(2000);
+    check('and turning it off leaves nothing behind on either',
+        [await bg('document.body'), await frameBodyBg()], [WHITE, WHITE]);
+
     /* ------------- a page the extension does not touch, and back to a cached one */
 
     // Moving to a page the extension leaves alone must not make it forget the
@@ -406,6 +447,46 @@ try {
     await sleep(2000);
     check('and the stylesheet it was left with survived the detour, and comes out',
         await bg('document.body'), WHITE);
+
+    /* --------------------------------------------------- a prerendered page */
+
+    // A page being prerendered lives in the same tab as the page on screen, and
+    // its own top level frame does not have frame id 0. Read as a sub frame of
+    // the page on screen it would be given that page's decision - here, the
+    // override that the prerendered URL is excluded from.
+    await settings({
+        OverrideAll: true,
+        background_color: '080808',
+        NotOverridenPages: [`http://localhost:${PORT}/prerendered`]
+    });
+    await sleep(1500);
+    await evaluate(sessionId, 'location.href = "/speculate"');
+    await sleep(2000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('speculate')));
+    check('the page doing the speculating is styled', await bg('document.body'), DARK);
+
+    await sleep(4000);
+    const prerender = await findTarget(x => x.type === 'page' && x.url.includes('/prerendered'));
+    if (!prerender) {
+        console.log('SKIP  this browser did not prerender the page, so the ' +
+            'prerendered-page checks were not run.');
+    } else {
+        const prerenderSession = await attach(prerender);
+        check('a page being prerendered is not given the styling of the page on screen',
+            await evaluate(prerenderSession,
+                'getComputedStyle(document.body).backgroundColor'), WHITE);
+        check('nor is the sub frame inside it',
+            await evaluate(prerenderSession,
+                "getComputedStyle(document.getElementById('f').contentDocument.body).backgroundColor"),
+            WHITE);
+    }
+
+    await evaluate(sessionId, 'location.href = "/prerendered"');
+    await sleep(3000);
+    sessionId = await attach(await findTarget(x => x.type === 'page' && x.url.includes('/prerendered')));
+    check('and it is still left alone once it is the page on screen',
+        await bg('document.body'), WHITE);
+    check('sub frame included', await frameBodyBg(), WHITE);
 } catch (e) {
     console.log('FAIL  integration run -> ' + e);
     results.push(false);

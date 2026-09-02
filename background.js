@@ -90,7 +90,10 @@ function queueSync(tabId, url, fresh) {
     const navigation = navigationOf(tabId);
     if (fresh !== undefined) {
         return runOnTab(tabId, function () {
-            if (navigationOf(tabId) !== navigation) {
+            // A page the tab is only prerendering is not made pointless by the
+            // page on screen changing: it is a page of its own, and it will be
+            // on screen itself if the user goes there.
+            if (fresh.active && navigationOf(tabId) !== navigation) {
                 return undefined;
             }
             return syncTab(tabId, url, fresh);
@@ -112,16 +115,28 @@ function queueSync(tabId, url, fresh) {
 /* ------------------------------------------------------------ tab plumbing */
 
 /**
- * What is known about a tab:
+ * What is known about a tab.
  *
- *   desired    what the page should have: its stylesheet, the stylesheet for
- *              its shadow trees, and whether the agent has to measure. Written
- *              as soon as a document commits, before anything is injected,
- *              because a sub frame commits while the top frame's injection is
- *              still running and has to read this navigation's answer, not the
- *              last page's. It is the one decision for the page: a sub frame
- *              applies it rather than deciding again from the settings, which
- *              may have moved on since.
+ * A tab is not one page. It holds the page it is showing, whatever the
+ * back/forward cache is keeping for it, and any page it is prerendering, all at
+ * once - so everything here is keyed by the document it belongs to rather than
+ * by the tab.
+ *
+ *   decisions  pageId -> what that page should have: its stylesheet, the
+ *              stylesheet for its shadow trees, and whether the agent has to
+ *              measure. Written as soon as the page's top document commits,
+ *              before anything is injected, because a sub frame commits while
+ *              the injection is still running and has to read its own page's
+ *              answer. It is the one decision for that page: a sub frame
+ *              applies it rather than deciding again from settings that may
+ *              have moved on since.
+ *   pages      documentId -> the page it belongs to. This is how a document is
+ *              reached at all: a page restored from the back/forward cache
+ *              brings its sub frames back already loaded, they commit nothing,
+ *              and `webNavigation.getAllFrames` does not list them - not even
+ *              seconds later. It is deliberately independent of everything
+ *              else, because a document with no stylesheet in it right now is
+ *              exactly the one that has to be found when the settings change.
  *   documents  documentId -> the stylesheets believed to be in that document,
  *              as indices into `sheets`. A stylesheet is added only by an
  *              insertCSS that succeeded and taken away only by a removeCSS that
@@ -132,17 +147,14 @@ function queueSync(tabId, url, fresh) {
  *              have them. The text is the only thing that can remove a
  *              stylesheet, and it is a few kilobytes, so documents refer to it
  *              rather than repeat it.
- *   pages      documentId -> the id of the top level document it belongs to,
- *              and `top`, the page the tab is on. A page restored from the
- *              back/forward cache brings its sub frames back already loaded:
- *              they commit nothing, and `webNavigation.getAllFrames` does not
- *              list them either, so this is the only way left to reach them.
+ *   top        the page the tab is actually showing. Only a fallback, for
+ *              working out which page a sub frame belongs to when the browser
+ *              does not say.
  *
- * A document the browser no longer lists is not necessarily gone: the
- * back/forward cache holds whole documents, stylesheet and all, and hands them
- * back on the next Back. Their entries are therefore kept - they cost an index
- * each - until there are more of them than any tab plausibly has, and only ones
- * that are not live are ever dropped.
+ * A document the browser no longer lists is not necessarily gone, so entries
+ * are kept until there are more of them than any tab plausibly has, and the
+ * ones in use are kept whatever the count. Everything for a tab goes when the
+ * tab does.
  */
 const MAX_DOCUMENTS = 50;
 
@@ -157,37 +169,43 @@ async function getRecord(tabId) {
     const stored = await chrome.storage.session.get(injectedKey(tabId));
     const value = stored[injectedKey(tabId)];
     return {
-        desired: (value && value.desired) || null,
+        decisions: (value && value.decisions) || {},
+        pages: (value && value.pages) || {},
         documents: (value && value.documents) || {},
         sheets: (value && value.sheets) || [],
-        pages: (value && value.pages) || {},
         top: (value && value.top) || null
     };
 }
 
 /**
- * The decision recorded for a page. A page with no record, or one whose record
- * says nothing is wanted, are the same thing to a document: take the stylesheet
- * out and stop the agent.
+ * What a page decided. A page nothing was decided for and a page decided to be
+ * left alone are the same thing to a document: take the stylesheet out and stop
+ * the agent.
  */
-function decisionOf(record) {
-    return record.desired || NOTHING;
+function decisionFor(record, pageId) {
+    return record.decisions[pageId] || NOTHING;
 }
 
-/** The documents recorded as belonging to a page, that page's own aside. */
-function documentsOfPage(record, topDocumentId) {
-    return Object.keys(record.documents).filter(function (id) {
-        return id !== topDocumentId && record.pages[id] === topDocumentId;
+/** The page a document belongs to, as far as anything here knows. */
+function pageOf(record, documentId, parentDocumentId) {
+    if (record.pages[documentId]) {
+        return record.pages[documentId];
+    }
+    if (parentDocumentId && record.pages[parentDocumentId]) {
+        return record.pages[parentDocumentId];
+    }
+    return record.top;
+}
+
+/** Every document recorded as belonging to a page, the page's own aside. */
+function documentsOfPage(record, pageId) {
+    return Object.keys(record.pages).filter(function (id) {
+        return id !== pageId && record.pages[id] === pageId;
     });
 }
 
 /** Drops the text of stylesheets no document refers to any more. */
 function compact(record) {
-    for (const id of Object.keys(record.pages)) {
-        if (!record.documents[id]) {
-            delete record.pages[id];
-        }
-    }
     const sheets = [];
     const moved = new Map();
     for (const id of Object.keys(record.documents)) {
@@ -201,9 +219,15 @@ function compact(record) {
     record.sheets = sheets;
 }
 
+function isEmpty(record) {
+    return !Object.keys(record.decisions).length &&
+        !Object.keys(record.pages).length &&
+        !Object.keys(record.documents).length;
+}
+
 function saveRecord(tabId, record) {
     compact(record);
-    if (!decisionOf(record).css && !Object.keys(record.documents).length) {
+    if (isEmpty(record)) {
         return chrome.storage.session.remove(injectedKey(tabId));
     }
     return chrome.storage.session.set({[injectedKey(tabId)]: record});
@@ -221,35 +245,98 @@ function indexOfSheet(record, css) {
 }
 
 /**
- * Forgets the oldest documents that are no longer live. A document still listed
- * by the browser is kept whatever the count: its stylesheets can still be
- * removed, and only this record knows their text.
+ * Forgets the oldest entries once a tab has more of them than it plausibly
+ * needs. Anything in `keep` - the documents of the page just worked on - stays
+ * whatever the count: those are the ones still being reached.
  */
-function forgetDeadDocuments(record, live) {
-    const ids = Object.keys(record.documents);
+function trim(map, keep) {
+    const ids = Object.keys(map);
     if (ids.length <= MAX_DOCUMENTS) {
         return;
     }
     for (const id of ids) {
-        if (Object.keys(record.documents).length <= MAX_DOCUMENTS) {
+        if (Object.keys(map).length <= MAX_DOCUMENTS) {
             return;
         }
-        if (!live || !live.has(id)) {
-            delete record.documents[id];
+        if (!keep.has(id)) {
+            delete map[id];
         }
     }
 }
 
-/** The documents the tab is holding right now, top level frame first. */
+function forget(record, keep) {
+    trim(record.decisions, keep);
+    trim(record.pages, keep);
+    trim(record.documents, keep);
+}
+
+/**
+ * The documents of the page the tab is showing.
+ *
+ * A tab can be holding more than that - a page it is prerendering is in the
+ * same tab and has a top level frame of its own - so anything that is not part
+ * of the active page is left out here and dealt with by its own page.
+ */
 async function liveFrames(tabId) {
     try {
         const frames = await chrome.webNavigation.getAllFrames({tabId: tabId});
         return (frames || []).filter(function (frame) {
-            return Boolean(frame.documentId);
+            return Boolean(frame.documentId) &&
+                (frame.documentLifecycle === undefined || frame.documentLifecycle === 'active');
         });
     } catch (e) {
         return [];
     }
+}
+
+/**
+ * The frame a page starts at.
+ *
+ * `frameId === 0` is not that test: a prerendered page's own top level frame
+ * has a non-zero id, which is what `frameType` was added for. The fallback is
+ * for browsers that do not report it.
+ */
+function isOutermost(frame) {
+    if (frame.frameType !== undefined) {
+        return frame.frameType === 'outermost_frame';
+    }
+    return frame.frameId === 0;
+}
+
+/**
+ * The documents that belong to one page, walked down from its top document.
+ *
+ * A frame list is not one page's worth of frames. While a page replaces another
+ * - a redirect, a link clicked before the last page finished - both documents
+ * can be in it at once, and a page being prerendered is in it the whole time.
+ * Taking the list at face value would mean applying one page's decision to
+ * another page's document, which is exactly what naming documents is meant to
+ * prevent.
+ */
+function documentsUnder(frames, top) {
+    const children = new Map();
+    for (const frame of frames) {
+        const parent = frame.parentDocumentId ||
+            (frame.parentFrameId >= 0 ? 'frame:' + frame.parentFrameId : null);
+        if (parent === null) {
+            continue;
+        }
+        children.set(parent, (children.get(parent) || []).concat([frame]));
+    }
+    const found = [top.documentId];
+    const queue = [top];
+    while (queue.length) {
+        const frame = queue.shift();
+        const below = (children.get(frame.documentId) || [])
+            .concat(children.get('frame:' + frame.frameId) || []);
+        for (const child of below) {
+            if (!found.includes(child.documentId)) {
+                found.push(child.documentId);
+                queue.push(child);
+            }
+        }
+    }
+    return found;
 }
 
 /** Resolves true only if the stylesheet is now in that document. */
@@ -399,65 +486,68 @@ async function wantedFor(url) {
 }
 
 /**
- * The tab is on a page the extension does not touch. Only the decision is
- * dropped: the documents already recorded may still be sitting in the
- * back/forward cache with a stylesheet in them, and this record holds the only
- * copy of the text that can remove it. They go when the tab does.
+ * Brings a whole page in line with what it should have: its top document, the
+ * documents the browser lists for it, and the ones only this record remembers -
+ * a page restored from the back/forward cache brings its sub frames back
+ * without an event or a frame tree entry of any kind.
+ *
+ * The decision is recorded before anything is injected, because a sub frame
+ * commits while the injection is still running and has to read its own page's
+ * answer rather than the last page's.
  */
-async function clearTab(tabId) {
-    const record = await getRecord(tabId);
-    record.desired = null;
+async function syncPage(tabId, pageId, decision, record, alsoLive) {
+    const ids = [pageId];
+    for (const id of (alsoLive || []).concat(documentsOfPage(record, pageId))) {
+        if (!ids.includes(id)) {
+            ids.push(id);
+        }
+    }
+
+    if (decision.css) {
+        record.decisions[pageId] = decision;
+    } else {
+        delete record.decisions[pageId];
+    }
+    for (const id of ids) {
+        record.pages[id] = pageId;
+    }
     await saveRecord(tabId, record);
-    await setIcon(tabId, false);
+
+    for (const id of ids) {
+        await syncDocument(tabId, id, decision.css, record);
+    }
+    forget(record, new Set(ids));
+    await saveRecord(tabId, record);
+
+    for (const id of ids) {
+        await applyAgent(tabId, id, decision);
+    }
 }
 
 /**
  * Brings a tab in line with the current settings. Runs on the tab's queue, so
  * it has the tab to itself for the whole of its read-modify-write.
  *
- * `fresh` ({frameId, documentId}) is set when a top level document has just
- * committed. The work is the same as a resync, but for that document alone:
- * the frame may already hold another one, and the other frames of the page get
- * their own commits.
+ * `fresh` is set when a page's top document has just committed, and names that
+ * document: the work is the same as a resync, but for the page that document
+ * starts - which is not necessarily the page the tab is showing, since a tab
+ * prerenders whole pages of its own.
  */
 async function syncTab(tabId, url, fresh) {
+    const record = await getRecord(tabId);
+
     if (fresh !== undefined) {
-        if (!isSupportedUrl(url)) {
-            await clearTab(tabId);
-            return;
+        const decision = isSupportedUrl(url) ? await wantedFor(url) : NOTHING;
+        if (fresh.active) {
+            record.top = fresh.documentId;
+            await setIcon(tabId, Boolean(decision.css));
         }
-        const wanted = await wantedFor(url);
-        await setIcon(tabId, Boolean(wanted.css));
-        const record = await getRecord(tabId);
-        // Recorded before anything is injected, so a sub frame committing while
-        // the agent is still being injected reads this navigation's answer.
-        record.desired = wanted.css ? wanted : null;
-        await saveRecord(tabId, record);
-        record.top = fresh.documentId;
-        record.pages[fresh.documentId] = fresh.documentId;
-        await syncDocument(tabId, fresh.documentId, wanted.css, record);
-        // A page restored from the back/forward cache brings its sub frames
-        // back with it, already loaded. They commit nothing, and the frame tree
-        // does not list them, so the record of which documents belonged to this
-        // page is the only way left to reach them. A page that has just loaded
-        // has none of these: its sub frames commit later, and are handled then.
-        const others = documentsOfPage(record, fresh.documentId);
-        for (const documentId of others) {
-            await syncDocument(tabId, documentId, wanted.css, record);
-        }
-        forgetDeadDocuments(record, new Set([fresh.documentId].concat(others)));
-        await saveRecord(tabId, record);
-        await applyAgent(tabId, fresh.documentId, wanted);
-        for (const documentId of others) {
-            await applyAgent(tabId, documentId, wanted);
-        }
+        await syncPage(tabId, fresh.documentId, decision, record);
         return;
     }
 
     const frames = await liveFrames(tabId);
-    const top = frames.find(function (frame) {
-        return frame.frameId === 0;
-    });
+    const top = frames.find(isOutermost);
     let currentUrl = top ? top.url : url;
     if (!top) {
         try {
@@ -467,31 +557,23 @@ async function syncTab(tabId, url, fresh) {
         }
     }
     if (!isSupportedUrl(currentUrl)) {
-        await clearTab(tabId);
+        // Nothing is dropped: the pages behind this one may still be in the
+        // back/forward cache with a stylesheet in them, and this record holds
+        // the only copy of the text that can remove it. They go when the tab
+        // does.
+        await setIcon(tabId, false);
         return;
     }
 
-    const wanted = await wantedFor(currentUrl);
-    await setIcon(tabId, Boolean(wanted.css));
-
-    const record = await getRecord(tabId);
-    record.desired = wanted.css ? wanted : null;
-    const live = new Set();
-    record.top = top ? top.documentId : record.top;
-    for (const frame of frames) {
-        live.add(frame.documentId);
-        if (record.top) {
-            record.pages[frame.documentId] = record.top;
-        }
-        // Sub frames follow the decision taken for the page they belong to.
-        await syncDocument(tabId, frame.documentId, wanted.css, record);
+    const pageId = top ? top.documentId : record.top;
+    if (!pageId) {
+        return;
     }
-    forgetDeadDocuments(record, live);
-    await saveRecord(tabId, record);
-
-    for (const frame of frames) {
-        await applyAgent(tabId, frame.documentId, wanted);
-    }
+    record.top = pageId;
+    const decision = await wantedFor(currentUrl);
+    await setIcon(tabId, Boolean(decision.css));
+    await syncPage(tabId, pageId, decision, record,
+        top ? documentsUnder(frames, top) : []);
 }
 
 async function syncAllTabs() {
@@ -521,29 +603,35 @@ async function syncActiveTab(tabId) {
  * rather than assumed empty.
  */
 chrome.webNavigation.onCommitted.addListener(function (details) {
-    if (details.frameId === 0) {
-        // Recorded before queueing, so work queued for the page this one
-        // replaces can tell that it has nothing left to do.
-        noteNavigation(details.tabId);
+    const active = details.documentLifecycle === undefined ||
+        details.documentLifecycle === 'active';
+    if (isOutermost(details)) {
+        if (active) {
+            // Recorded before queueing, so work queued for the page this one
+            // replaces can tell that it has nothing left to do.
+            noteNavigation(details.tabId);
+        }
         queueSync(details.tabId, details.url, {
-            frameId: details.frameId,
-            documentId: details.documentId
+            documentId: details.documentId,
+            active: active
         });
         return;
     }
     const navigation = navigationOf(details.tabId);
     runOnTab(details.tabId, async function () {
-        if (navigationOf(details.tabId) !== navigation) {
+        if (active && navigationOf(details.tabId) !== navigation) {
             return;
         }
-        // Whatever the page decided, including that it wants nothing: a sub
-        // frame restored from the back/forward cache still holds the stylesheet
-        // and the agent it was left with, and both have to go.
+        // Whatever this frame's own page decided, including that it wants
+        // nothing: a sub frame restored from the back/forward cache still holds
+        // the stylesheet and the agent it was left with, and both have to go.
         const record = await getRecord(details.tabId);
-        const decision = decisionOf(record);
-        if (record.top) {
-            record.pages[details.documentId] = record.top;
+        const pageId = pageOf(record, details.documentId, details.parentDocumentId);
+        if (!pageId) {
+            return;
         }
+        const decision = decisionFor(record, pageId);
+        record.pages[details.documentId] = pageId;
         await syncDocument(details.tabId, details.documentId, decision.css, record);
         await saveRecord(details.tabId, record);
         await applyAgent(details.tabId, details.documentId, decision);
@@ -553,7 +641,7 @@ chrome.webNavigation.onCommitted.addListener(function (details) {
 // Single page applications change the URL without committing a new document,
 // which can flip a per-page override on or off.
 chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
-    if (details.frameId === 0) {
+    if (isOutermost(details) && details.documentLifecycle !== 'prerender') {
         queueSync(details.tabId, details.url);
     }
 });
