@@ -33,7 +33,7 @@ function setRowsVisible(ids, visible) {
     });
 }
 
-const COLOR_ROWS = ['background_color_row', 'text_color_row', 'links_color_row', 'visited_links_color_row'];
+const COLOR_ROWS = ['background_color_row', 'text_color_row', 'links_color_row', 'visited_links_color_row', 'override_gradients_row'];
 const FONT_ROWS = ['fontSelection', 'fontSizeRow'];
 
 function applySampleColors() {
@@ -59,6 +59,10 @@ function displayColoredMessage(element, message, colorCode) {
 /* ---------------------------------------------------------------- colors */
 
 function initColors() {
+    $('overrideGradients').checked = Boolean(settings.OverrideGradients);
+    $('overrideGradients').addEventListener('change', function () {
+        save({OverrideGradients: $('overrideGradients').checked});
+    });
     ['background_color', 'text_color', 'links_color', 'visited_links_color'].forEach(function (id) {
         const input = $(id);
         input.value = toInputColor(settings[id]);

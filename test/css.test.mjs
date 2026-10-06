@@ -56,6 +56,9 @@ const PAGE = `<!doctype html><html><head><style>
 <div id="modern" style="background: oklch(0.85 0.1 240)">modern color</div>
 <div id="modernScrim" style="background: oklch(0.85 0.1 240 / 0.4)">modern translucent</div>
 <div id="dynamic">dynamic background</div>
+<div id="gradient" style="background-image:linear-gradient(white, gray)">gradient</div>
+<div id="mixedGradient" style="background-image:radial-gradient(white, gray),url(/hero.gif);background-size:10px 10px,cover">mixed</div>
+<div id="conicGradient" style="background-image:repeating-conic-gradient(white 0deg 20deg,black 20deg 40deg)">conic</div>
 
 <!-- A background a descendant only gets through an ancestor's class... -->
 <div id="theme"><div id="themed">themed</div></div>
@@ -190,6 +193,35 @@ try {
     await evaluate(sessionId, agentSource);
     await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
     await sleep(1000);
+
+    const image = id => evaluate(sessionId, 'getComputedStyle(document.getElementById(' + JSON.stringify(id) + ')).backgroundImage');
+    check('gradient override is off by default', DEFAULTS.OverrideGradients, false);
+    check('default settings preserve gradients', (await image('gradient')).startsWith('linear-gradient('), true);
+    settings.OverrideGradients = true;
+    await evaluate(sessionId, `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`);
+    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, true)`);
+    await sleep(300);
+    check('linear gradient is removed', await image('gradient'), 'none');
+    check('gradient surface keeps the chosen background', await bg('gradient'), DARK);
+    check('repeating conic gradient is removed', await image('conicGradient'), 'none');
+    check('mixed backgrounds preserve the image layer and its position',
+        (await image('mixedGradient')).startsWith('none, url('), true);
+    await evaluate(sessionId, 'document.body.style.backgroundImage = "linear-gradient(white, gray)"');
+    await sleep(300);
+    check('body gradient assigned later is removed', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundImage'), 'none');
+    await evaluate(sessionId, 'document.getElementById("gradient").style.backgroundImage = "url(/hero.gif)"');
+    await sleep(300);
+    check('changing a gradient into an image restores the image', (await image('gradient')).startsWith('url('), true);
+    settings.OverrideGradients = false;
+    await evaluate(sessionId, `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`);
+    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, false)`);
+    await sleep(300);
+    check('turning the option off restores gradients', (await image('conicGradient')).startsWith('repeating-conic-gradient('), true);
+    check('turning it off removes gradient tags', await evaluate(sessionId, 'document.querySelectorAll("[data-changecolors-gradient]").length'), 0);
+    settings.OverrideGradients = true;
+    await evaluate(sessionId, `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`);
+    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, true)`);
+    await sleep(300);
 
     check('transparent overlay over a label is cleared', await bg('ripple'), CLEAR);
     check('transparent overlay over a video is cleared', await bg('videoOverlay'), CLEAR);
@@ -479,6 +511,8 @@ try {
     /* ---------------------------------------------------------- turning off */
 
     await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
+    check('stopping restores the original gradient', (await image('conicGradient')).startsWith('repeating-conic-gradient('), true);
+    check('stopping removes gradient tags', await evaluate(sessionId, 'document.querySelectorAll("[data-changecolors-gradient]").length'), 0);
     check('stopping the agent removes its attributes', await evaluate(sessionId,
         'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
     check('stopping the agent removes them inside shadow trees too', await evaluate(sessionId,

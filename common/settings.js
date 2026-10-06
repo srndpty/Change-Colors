@@ -16,6 +16,7 @@ export const DEFAULTS = {
     CustomFonts: [],
     DefaultBrowserFont: true,
     DefaultBrowserColor: false,
+    OverrideGradients: false,
     text_color: 'E8E8E8',
     background_color: '080808',
     links_color: '2E79DB',

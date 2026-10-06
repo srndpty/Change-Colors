@@ -297,7 +297,7 @@ async function removeCss(tabId, documentId, css) {
  * layers a page stacks over its content - a headline over a hero banner, the
  * controls over a video - would stay opaque until the page went idle.
  */
-async function startAgent(tabId, documentId, shadowCss, probe) {
+async function startAgent(tabId, documentId, shadowCss, probe, gradients) {
     const target = {tabId: tabId, documentIds: [documentId]};
     try {
         await chrome.scripting.executeScript({
@@ -307,11 +307,11 @@ async function startAgent(tabId, documentId, shadowCss, probe) {
         });
         await chrome.scripting.executeScript({
             target: target,
-            args: [shadowCss, probe],
+            args: [shadowCss, probe, gradients],
             injectImmediately: true,
-            func: function (css, measure) {
+            func: function (css, measure, gradients) {
                 if (window.__changeColorsAgent) {
-                    window.__changeColorsAgent.setCss(css, measure);
+                    window.__changeColorsAgent.setCss(css, measure, gradients);
                 }
             }
         });
@@ -328,7 +328,7 @@ async function startAgent(tabId, documentId, shadowCss, probe) {
  */
 async function applyAgent(tabId, documentId, decision) {
     if (decision.shadowCss !== null) {
-        await startAgent(tabId, documentId, decision.shadowCss, decision.probe);
+        await startAgent(tabId, documentId, decision.shadowCss, decision.probe, decision.gradients);
     } else {
         await stopAgent(tabId, documentId);
     }
@@ -372,7 +372,8 @@ async function wantedFor(url) {
     return {
         css: buildCss(settings),
         shadowCss: needsPageAgent(settings) ? buildShadowCss(settings) : null,
-        probe: needsBackgroundProbe(settings)
+        probe: needsBackgroundProbe(settings),
+        gradients: !settings.DefaultBrowserColor && settings.OverrideGradients
     };
 }
 

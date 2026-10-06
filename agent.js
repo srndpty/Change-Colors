@@ -24,6 +24,36 @@
 (function () {
     const CLEAR = 'data-changecolors-clear';
     const PROBE = 'data-changecolors-probe';
+    const GRADIENT = 'data-changecolors-gradient';
+    const BACKGROUND_IMAGE = '--changecolors-background-image';
+
+    // Split only top-level commas: URLs and gradient arguments may contain commas.
+    function withoutGradients(image) {
+        const layers = [];
+        let start = 0, depth = 0, quote = '';
+        for (let i = 0; i < image.length; i++) {
+            const char = image[i];
+            if (char === '\\') { i++; continue; }
+            if (quote) { if (char === quote) quote = ''; continue; }
+            if (char === '"' || char === "'") { quote = char; continue; }
+            if (char === '(') depth++;
+            if (char === ')') depth--;
+            if (char === ',' && depth === 0) {
+                layers.push(image.slice(start, i).trim());
+                start = i + 1;
+            }
+        }
+        layers.push(image.slice(start).trim());
+        let changed = false;
+        const filtered = layers.map(function (layer) {
+            if (/^(?:-webkit-)?(?:repeating-)?(?:linear|radial|conic)-gradient\(/i.test(layer)) {
+                changed = true;
+                return 'none';
+            }
+            return layer;
+        });
+        return changed ? filtered.join(', ') : null;
+    }
     // Anything this translucent reads as an overlay rather than a surface.
     const SOLID_ALPHA = 0.9;
     const FLUSH_DELAY = 100;
@@ -65,6 +95,7 @@
     // Whether the stylesheet paints backgrounds, and elements therefore have to
     // be measured.
     let measuring = true;
+    let overrideGradients = false;
     // Every shadow root the stylesheet is in, and the observer watching each of
     // them: stop() has to be able to take the stylesheet out of all of them,
     // including the ones found before the last setCss(), and both of these
@@ -234,9 +265,14 @@
         }
     }
 
-    function setCss(css, measure) {
+    function setCss(css, measure, gradients) {
         sheetCss = css;
         measuring = measure !== false;
+        overrideGradients = measuring && gradients === true;
+        if (!overrideGradients) {
+            document.querySelectorAll('[' + GRADIENT + ']').forEach(clearGradient);
+            for (const root of styledRoots) root.querySelectorAll('[' + GRADIENT + ']').forEach(clearGradient);
+        }
         if (!sheet) {
             try {
                 sheet = new CSSStyleSheet();
@@ -319,13 +355,23 @@
         for (const element of elements) {
             element.setAttribute(PROBE, '');
         }
-        const seeThrough = elements.map(function (element) {
-            return isSeeThrough(window.getComputedStyle(element).backgroundColor);
+        const backgrounds = elements.map(function (element) {
+            const style = window.getComputedStyle(element);
+            return {clear: isSeeThrough(style.backgroundColor), image: overrideGradients ? withoutGradients(style.backgroundImage) : null};
         });
         for (let i = 0; i < elements.length; i++) {
             const element = elements[i];
             element.removeAttribute(PROBE);
-            if (seeThrough[i]) {
+            const background = backgrounds[i];
+            if (background.image !== null) {
+                element.style.setProperty(BACKGROUND_IMAGE, background.image);
+                element.setAttribute(GRADIENT, '');
+            } else if (element.hasAttribute(GRADIENT)) {
+                element.style.removeProperty(BACKGROUND_IMAGE);
+                element.removeAttribute(GRADIENT);
+            }
+            if (element === document.documentElement || element === document.body) continue;
+            if (background.clear && background.image === null) {
                 if (!element.hasAttribute(CLEAR)) {
                     element.setAttribute(CLEAR, '');
                 }
@@ -338,9 +384,6 @@
     /* ------------------------------------------------------------- walking */
 
     function want(element, batch, seen) {
-        if (element === document.documentElement || element === document.body) {
-            return;
-        }
         if (seen.has(element) || !element.isConnected) {
             return;
         }
@@ -573,6 +616,7 @@
                 return '';
             }
             const property = declaration.slice(0, colon).trim().toLowerCase();
+            if (property === BACKGROUND_IMAGE) return '';
             return property === 'background' || property.indexOf('background-') === 0 ||
                     property.indexOf('--') === 0 ? declaration.trim() : '';
         }).filter(Boolean).sort().join(';');
@@ -649,10 +693,17 @@
         if (!root || !root.querySelectorAll) {
             return;
         }
-        root.querySelectorAll('[' + CLEAR + '],[' + PROBE + ']').forEach(function (element) {
+        root.querySelectorAll('[' + CLEAR + '],[' + PROBE + '],[' + GRADIENT + ']').forEach(function (element) {
             element.removeAttribute(CLEAR);
             element.removeAttribute(PROBE);
+            if (element.hasAttribute(GRADIENT)) element.style.removeProperty(BACKGROUND_IMAGE);
+            element.removeAttribute(GRADIENT);
         });
+    }
+
+    function clearGradient(element) {
+        element.style.removeProperty(BACKGROUND_IMAGE);
+        element.removeAttribute(GRADIENT);
     }
 
     window.__changeColorsAgent = {

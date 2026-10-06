@@ -106,6 +106,13 @@ function build(settings, scope) {
     let css = '';
 
     if (!settings.DefaultBrowserColor) {
+        if (settings.OverrideGradients) {
+            const gradient = '[data-changecolors-gradient]' + NOT_PROBED;
+            css += prefixed(scope, [gradient], BOOST_OVER_BASE) +
+                (scope.host ? ',:host([data-changecolors-gradient])' + NOT_PROBED + BOOST_OVER_BASE :
+                    ',html' + gradient + BOOST_OVER_BASE + ',html > body' + gradient + BOOST_OVER_BASE) +
+                '{background-image: var(--changecolors-background-image, none) !important;}';
+        }
         css += frame + ',' + inside + '{' +
             'background-color: #' + settings.background_color + ' !important;' +
             'color: #' + settings.text_color + ' !important;' +
