@@ -26,6 +26,16 @@
     const PROBE = 'data-changecolors-probe';
     const GRADIENT = 'data-changecolors-gradient';
     const BACKGROUND_IMAGE = '--changecolors-background-image';
+    const GRADIENT_TARGETS = ['', 'before', 'after'].map(function (pseudo) {
+        return {
+            pseudo: pseudo ? '::' + pseudo : null,
+            attribute: GRADIENT + (pseudo ? '-' + pseudo : ''),
+            property: BACKGROUND_IMAGE + (pseudo ? '-' + pseudo : '')
+        };
+    });
+    const GRADIENT_SELECTOR = GRADIENT_TARGETS.map(
+        (target) => '[' + target.attribute + ']'
+    ).join(',');
 
     // Split only top-level commas: URLs and gradient arguments may contain commas.
     function withoutGradients(image) {
@@ -291,13 +301,9 @@
         measuring = measure !== false;
         overrideGradients = measuring && gradients === true;
         if (!overrideGradients) {
-            document
-                .querySelectorAll('[' + GRADIENT + ']')
-                .forEach(clearGradient);
+            document.querySelectorAll(GRADIENT_SELECTOR).forEach(clearGradient);
             for (const root of styledRoots)
-                root.querySelectorAll('[' + GRADIENT + ']').forEach(
-                    clearGradient
-                );
+                root.querySelectorAll(GRADIENT_SELECTOR).forEach(clearGradient);
         }
         if (!sheet) {
             try {
@@ -387,19 +393,31 @@
                 clear: isSeeThrough(style.backgroundColor),
                 image: overrideGradients
                     ? withoutGradients(style.backgroundImage)
-                    : null
+                    : null,
+                pseudoImages: GRADIENT_TARGETS.slice(1).map((target) =>
+                    overrideGradients
+                        ? withoutGradients(
+                              window.getComputedStyle(element, target.pseudo)
+                                  .backgroundImage
+                          )
+                        : null
+                )
             };
         });
         for (let i = 0; i < elements.length; i++) {
             const element = elements[i];
             element.removeAttribute(PROBE);
             const background = backgrounds[i];
-            if (background.image !== null) {
-                element.style.setProperty(BACKGROUND_IMAGE, background.image);
-                element.setAttribute(GRADIENT, '');
-            } else if (element.hasAttribute(GRADIENT)) {
-                element.style.removeProperty(BACKGROUND_IMAGE);
-                element.removeAttribute(GRADIENT);
+            const images = [background.image, ...background.pseudoImages];
+            for (let j = 0; j < GRADIENT_TARGETS.length; j++) {
+                const target = GRADIENT_TARGETS[j];
+                if (images[j] !== null) {
+                    element.style.setProperty(target.property, images[j]);
+                    element.setAttribute(target.attribute, '');
+                } else if (element.hasAttribute(target.attribute)) {
+                    element.style.removeProperty(target.property);
+                    element.removeAttribute(target.attribute);
+                }
             }
             if (
                 element === document.documentElement ||
@@ -674,7 +692,12 @@
                     .slice(0, colon)
                     .trim()
                     .toLowerCase();
-                if (property === BACKGROUND_IMAGE) return '';
+                if (
+                    GRADIENT_TARGETS.some(
+                        (target) => property === target.property
+                    )
+                )
+                    return '';
                 return property === 'background' ||
                     property.indexOf('background-') === 0 ||
                     property.indexOf('--') === 0
@@ -760,19 +783,20 @@
             return;
         }
         root.querySelectorAll(
-            '[' + CLEAR + '],[' + PROBE + '],[' + GRADIENT + ']'
+            '[' + CLEAR + '],[' + PROBE + '],' + GRADIENT_SELECTOR
         ).forEach(function (element) {
             element.removeAttribute(CLEAR);
             element.removeAttribute(PROBE);
-            if (element.hasAttribute(GRADIENT))
-                element.style.removeProperty(BACKGROUND_IMAGE);
-            element.removeAttribute(GRADIENT);
+            clearGradient(element);
         });
     }
 
     function clearGradient(element) {
-        element.style.removeProperty(BACKGROUND_IMAGE);
-        element.removeAttribute(GRADIENT);
+        for (const target of GRADIENT_TARGETS) {
+            if (element.hasAttribute(target.attribute))
+                element.style.removeProperty(target.property);
+            element.removeAttribute(target.attribute);
+        }
     }
 
     window.__changeColorsAgent = {

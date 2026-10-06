@@ -1,6 +1,6 @@
 {
     "name": "change-colors",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "private": true,
     "description": "Customize web page colors, fonts, images, and link styles for more comfortable reading.",
     "type": "module",

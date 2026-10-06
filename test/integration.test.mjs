@@ -89,6 +89,7 @@ if (!CHROME) {
 }
 
 const FRAME = `<!doctype html><html><body style="background:#ffffff;color:#111">
+<div id="frameGradient" style="background-image:linear-gradient(white,gray)">gradient</div>
 <p id="p">framed</p>
 <div id="frameOverlay" style="position:absolute;inset:0"></div>
 </body></html>`;
@@ -426,6 +427,46 @@ try {
         CLEAR
     );
     check('and the sub frame', await frameBodyBg(), DARK);
+
+    await settings({ OverrideGradients: true });
+    await sleep(1500);
+    await evaluate(
+        sessionId,
+        `(() => {
+        const frame = document.createElement('iframe');
+        frame.id = 'lateGradientFrame';
+        frame.src = '/frame?late-gradient';
+        document.body.appendChild(frame);
+    })()`
+    );
+    const lateFrameImage = () =>
+        evaluate(
+            sessionId,
+            `(() => {
+        const element = document.getElementById('lateGradientFrame').contentDocument?.getElementById('frameGradient');
+        return element ? getComputedStyle(element).backgroundImage : 'loading';
+    })()`
+        );
+    check(
+        'gradient override reaches an iframe added after top-page sync',
+        await settles(lateFrameImage, 'none'),
+        'none'
+    );
+    await settings({ OverrideGradients: false });
+    check(
+        'turning gradient override off restores the late iframe',
+        (
+            await settles(
+                lateFrameImage,
+                'linear-gradient(rgb(255, 255, 255), rgb(128, 128, 128))'
+            )
+        ).startsWith('linear-gradient('),
+        true
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("lateGradientFrame").remove()'
+    );
 
     /* ------------------------------------------------- navigating with a frame */
 

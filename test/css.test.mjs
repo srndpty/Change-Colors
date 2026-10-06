@@ -25,6 +25,9 @@ const PORT = 8124;
 const PAGE = `<!doctype html><html><head><style>
 /* The kind of declaration that used to beat the extension. */
 #stubborn { color: #0f0f0f !important; background-color: #ffffff !important; }
+.pseudo::before { content: ''; position:absolute; inset:0; background:linear-gradient(white,#eee); }
+.pseudo::after { content: ''; background-image:radial-gradient(white,gray),url(/hero.gif); }
+.pseudo.changed::before { background-image:url(/hero.gif); }
 /* The kind of rule that gives a descendant a background when an ancestor's
    class changes - a theme switch, an expanded menu. */
 .dark #themed { background-color: #ffffff; }
@@ -61,6 +64,7 @@ const PAGE = `<!doctype html><html><head><style>
 <div id="modernScrim" style="background: oklch(0.85 0.1 240 / 0.4)">modern translucent</div>
 <div id="dynamic">dynamic background</div>
 <div id="gradient" style="background-image:linear-gradient(white, gray)">gradient</div>
+<div id="pseudoGradient" class="pseudo" style="background-image:url(/hero.gif)">pseudo</div>
 <div id="mixedGradient" style="background-image:radial-gradient(white, gray),url(/hero.gif);background-size:10px 10px,cover">mixed</div>
 <div id="conicGradient" style="background-image:repeating-conic-gradient(white 0deg 20deg,black 20deg 40deg)">conic</div>
 
@@ -79,7 +83,8 @@ const PAGE = `<!doctype html><html><head><style>
   const host = document.getElementById('widget');
   const root = host.attachShadow({mode: 'open'});
   root.innerHTML = '<style>:host{background:#fff}span{color:#0f0f0f;background:#ffffff}' +
-      '#shadowOverlay{display:block;height:10px}</style>' +
+      '#shadowOverlay{display:block;height:10px}' +
+      ':host::before,span::after{content:"";background-image:linear-gradient(white,gray)}</style>' +
       '<span id="shadowText">sidebar entry</span>' +
       '<i id="shadowOverlay"></i><div id="nested"></div>';
   const nestedHost = root.getElementById('nested');
@@ -299,6 +304,16 @@ try {
         (await image('gradient')).startsWith('linear-gradient('),
         true
     );
+    check(
+        'default settings preserve pseudo gradients',
+        (
+            await evaluate(
+                sessionId,
+                "getComputedStyle(document.getElementById('pseudoGradient'),'::before').backgroundImage"
+            )
+        ).startsWith('linear-gradient('),
+        true
+    );
     settings.OverrideGradients = true;
     await evaluate(
         sessionId,
@@ -310,6 +325,65 @@ try {
     );
     await sleep(300);
     check('linear gradient is removed', await image('gradient'), 'none');
+    check(
+        'shadow host pseudo gradient is removed',
+        await evaluate(
+            sessionId,
+            "getComputedStyle(document.getElementById('widget'),'::before').backgroundImage"
+        ),
+        'none'
+    );
+    check(
+        'pseudo gradient inside a shadow tree is removed',
+        await evaluate(
+            sessionId,
+            "getComputedStyle(document.getElementById('widget').shadowRoot.getElementById('shadowText'),'::after').backgroundImage"
+        ),
+        'none'
+    );
+    const pseudoImage = (pseudo) =>
+        evaluate(
+            sessionId,
+            `getComputedStyle(document.getElementById('pseudoGradient'), ${JSON.stringify(pseudo)}).backgroundImage`
+        );
+    check(
+        'before gradient is removed independently',
+        await pseudoImage('::before'),
+        'none'
+    );
+    check(
+        'pseudo gradient uses the selected background',
+        await evaluate(
+            sessionId,
+            "getComputedStyle(document.getElementById('pseudoGradient'),'::before').backgroundColor"
+        ),
+        DARK
+    );
+    check(
+        'after gradient preserves its image layer',
+        (await pseudoImage('::after')).startsWith('none, url('),
+        true
+    );
+    check(
+        'pseudo processing preserves the real element image',
+        (await image('pseudoGradient')).startsWith('url('),
+        true
+    );
+    await evaluate(
+        sessionId,
+        "document.getElementById('pseudoGradient').classList.add('changed')"
+    );
+    await sleep(300);
+    check(
+        'pseudo image changes are remeasured',
+        (await pseudoImage('::before')).startsWith('url('),
+        true
+    );
+    await evaluate(
+        sessionId,
+        "document.getElementById('pseudoGradient').classList.remove('changed')"
+    );
+    await sleep(300);
     check(
         'gradient surface keeps the chosen background',
         await bg('gradient'),
@@ -361,6 +435,16 @@ try {
     check(
         'turning the option off restores gradients',
         (await image('conicGradient')).startsWith('repeating-conic-gradient('),
+        true
+    );
+    check(
+        'turning the option off restores before gradients',
+        (await pseudoImage('::before')).startsWith('linear-gradient('),
+        true
+    );
+    check(
+        'turning the option off restores after gradients',
+        (await pseudoImage('::after')).startsWith('radial-gradient('),
         true
     );
     check(
@@ -901,6 +985,19 @@ try {
     /* ---------------------------------------------------------- turning off */
 
     await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
+    check(
+        'stopping restores pseudo gradients',
+        (await pseudoImage('::before')).startsWith('linear-gradient('),
+        true
+    );
+    check(
+        'stopping removes pseudo gradient attributes',
+        await evaluate(
+            sessionId,
+            'document.querySelectorAll("[data-changecolors-gradient-before],[data-changecolors-gradient-after]").length'
+        ),
+        0
+    );
     check(
         'stopping restores the original gradient',
         (await image('conicGradient')).startsWith('repeating-conic-gradient('),

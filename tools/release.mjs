@@ -88,9 +88,13 @@ if (!/^\d+\.\d+(\.\d+)?(\.\d+)?$/.test(manifest.version)) {
 
 /* --------------------------------------------------------------- the tests */
 
-run('what a tab knows', 'test/record.test.mjs');
-run('the override rules', 'test/settings.test.mjs');
-run('the 2.x migration', 'test/migration.test.mjs');
+console.log('\n=== lint, formatting, types and unit tests');
+const quality = spawnSync('npm run check', {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: true
+});
+if (quality.status !== 0) fail('npm run check failed');
 run('the stylesheet in a real layout', 'test/css.test.mjs');
 run('the extension, loaded from the source', 'test/integration.test.mjs');
 run('what the styling costs a busy page', 'test/perf.test.mjs');

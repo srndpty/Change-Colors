@@ -144,6 +144,40 @@ function build(settings, scope) {
                       gradient +
                       BOOST_OVER_BASE) +
                 '{background-image: var(--changecolors-background-image, none) !important;}';
+            for (const pseudo of ['before', 'after']) {
+                const attribute =
+                    '[data-changecolors-gradient-' + pseudo + ']' + NOT_PROBED;
+                const selectors = [
+                    scope.prefix + attribute + BOOST_OVER_BASE + '::' + pseudo
+                ];
+                selectors.push(
+                    scope.host
+                        ? ':host([data-changecolors-gradient-' +
+                              pseudo +
+                              '])' +
+                              NOT_PROBED +
+                              BOOST_OVER_BASE +
+                              '::' +
+                              pseudo
+                        : 'html' + attribute + BOOST_OVER_BASE + '::' + pseudo,
+                    ...(scope.host
+                        ? []
+                        : [
+                              'html > body' +
+                                  attribute +
+                                  BOOST_OVER_BASE +
+                                  '::' +
+                                  pseudo
+                          ])
+                );
+                css +=
+                    selectors.join(',') +
+                    '{background-image: var(--changecolors-background-image-' +
+                    pseudo +
+                    ', none) !important;background-color: #' +
+                    settings.background_color +
+                    ' !important;}';
+            }
         }
         css +=
             frame +

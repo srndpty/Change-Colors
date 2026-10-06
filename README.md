@@ -7,6 +7,15 @@ Original source: https://github.com/Strav/Change-Colors
 
 ## Release notes
 
+### 3.0.1 - Optional gradient backgrounds and quality checks
+
+- Add "Override gradient backgrounds", off by default. When enabled, CSS
+  gradients on elements and their `::before` / `::after` backgrounds are replaced
+  with the selected background color, while ordinary image layers stay in place.
+- Preserve this setting in saved page decisions so newly added iframes receive it.
+- Add linting, formatting, shared-module type checks, pre-commit checks and CI.
+  The release gate now runs `npm run check` before browser tests and packaging.
+
 ### 3.0.0 - Manifest V3
 
 The extension was stuck on Manifest V2 and stopped being distributable. It now
@@ -327,7 +336,8 @@ npm run release
 ```
 
 is everything that has to be true before uploading one, in order: the versions
-in `package.json` and `manifest.json` agree, every test passes, `build/` is
+in `package.json` and `manifest.json` agree, `npm run check` passes (lint,
+formatting, types and unit tests), every browser test passes, `build/` is
 staged, **the integration test is run again against `build/` itself**, and the
 ZIP is written to `dist/` with its SHA-256 and the commit it was built from
 printed. Upload that file from the Package tab of the developer dashboard.

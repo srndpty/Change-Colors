@@ -42,6 +42,31 @@ function decision(css) {
     };
 }
 
+const gradientRecord = readRecord(null);
+setDecision(gradientRecord, 'gradient-page', {
+    ...decision('gradient-css'),
+    gradients: true
+});
+const gradientRoundTrip = readRecord(
+    JSON.parse(JSON.stringify(gradientRecord))
+);
+check(
+    'gradient decision survives JSON storage',
+    decisionFor(gradientRoundTrip, 'gradient-page').gradients,
+    true
+);
+delete gradientRoundTrip.decisions['gradient-page'].gradients;
+check(
+    'legacy decisions default gradients to false',
+    decisionFor(gradientRoundTrip, 'gradient-page').gradients,
+    false
+);
+check(
+    'missing decisions default gradients to false',
+    decisionFor(gradientRoundTrip, 'missing').gradients,
+    false
+);
+
 /** A page with a top document and `frames` sub frames, all holding `css`. */
 function page(record, pageId, frames, css) {
     setDecision(record, pageId, decision(css));
