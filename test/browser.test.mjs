@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browserArgs, connectBrowser } from './browser.mjs';
+import { browserArgs, connectBrowser, matchesExtension } from './browser.mjs';
 
 function fixture() {
     const child = new EventEmitter();
@@ -80,4 +80,22 @@ test('sandbox is disabled only in Linux CI', () => {
     assert.deepEqual(browserArgs({ CI: 'true' }, 'linux'), ['--no-sandbox']);
     assert.deepEqual(browserArgs({}, 'linux'), []);
     assert.deepEqual(browserArgs({ CI: 'true' }, 'win32'), []);
+});
+
+test('worker selection rejects unrelated extensions and wrong versions', () => {
+    const expected = {
+        name: 'Change Colors',
+        version: '3.0.1',
+        manifest_version: 3
+    };
+    assert.equal(
+        matchesExtension({ ...expected, name: 'google.com' }, expected),
+        false
+    );
+    assert.equal(
+        matchesExtension({ ...expected, version: '3.0.0' }, expected),
+        false
+    );
+    assert.equal(matchesExtension(expected, expected), true);
+    assert.equal(matchesExtension(null, expected), false);
 });

@@ -309,6 +309,13 @@ Set `REQUIRE_BROWSER=1` to require both tests to run. If the selected browser lo
 an unexpected extension, choose a different Chromium build with
 `CHROME_UNBRANDED`. CI downloads its pinned Playwright Chromium automatically.
 
+Playwright is pinned to 1.61.0 (Chromium revision 1228), the build validated for
+extension integration tests. Revision 1243 returned an unrelated `google.com`
+manifest in local and CI runs. Revalidate extension loading before upgrading
+this dependency. Tests prefer the pinned Playwright executable over arbitrary
+cache entries and select the worker by manifest name, version and manifest
+version rather than only its script filename.
+
 Browser commands fail after 30 seconds without a DevTools response, and each
 browser test process has a five-minute limit. Browser exits, pipe errors and
 timeouts report the executable path and the last 16 KB of Chromium stderr.

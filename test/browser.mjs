@@ -8,9 +8,11 @@
 // tells the difference.
 import fs from 'node:fs';
 import path from 'node:path';
+import { chromium } from 'playwright';
 
 function candidates() {
     const found = [];
+    found.push(chromium.executablePath());
     if (process.env.CHROME) {
         found.push(process.env.CHROME);
     }
@@ -85,6 +87,14 @@ export function skipWithoutChrome(what) {
  */
 export function browserArgs(env = process.env, platform = process.platform) {
     return env.CI && platform === 'linux' ? ['--no-sandbox'] : [];
+}
+
+export function matchesExtension(manifest, expected) {
+    return (
+        manifest?.name === expected.name &&
+        manifest?.version === expected.version &&
+        manifest?.manifest_version === expected.manifest_version
+    );
 }
 
 /** Bounded DevTools pipe transport shared by all browser tests. */

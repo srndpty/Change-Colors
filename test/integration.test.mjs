@@ -11,7 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { connectBrowser, browserArgs } from './browser.mjs';
+import { connectBrowser, browserArgs, matchesExtension } from './browser.mjs';
+import { chromium } from 'playwright';
 
 const PORT = 8127;
 // What gets loaded into the browser. The release gate points this at `build/`,
@@ -32,6 +33,7 @@ function findBrowser() {
     if (process.env.CHROME_UNBRANDED) {
         candidates.push(process.env.CHROME_UNBRANDED);
     }
+    candidates.push(chromium.executablePath());
     const caches = [
         process.env.LOCALAPPDATA &&
             path.join(process.env.LOCALAPPDATA, 'ms-playwright'),
@@ -301,28 +303,45 @@ const TEXT = 'rgb(232, 232, 232)';
 
 try {
     await sleep(3000);
-    const worker = await findTarget(
-        (x) => x.type === 'service_worker' && x.url.endsWith('/background.js')
+    const expectedManifest = JSON.parse(
+        fs.readFileSync(path.join(EXTENSION, 'manifest.json'), 'utf8')
     );
-    if (!worker) {
-        const t = await send('Target.getTargets');
-        throw new Error(
-            'the extension service worker never showed up: ' +
-                (t.result.targetInfos || [])
-                    .map((x) => x.type + ' ' + x.url)
-                    .join(' | ')
-        );
+    const workerObservations = new Set();
+    let workerSession;
+    for (let attempt = 0; attempt < 40 && !workerSession; attempt++) {
+        const targets = await send('Target.getTargets');
+        for (const worker of targets.result.targetInfos.filter(
+            (x) =>
+                x.type === 'service_worker' &&
+                x.url.startsWith('chrome-extension://') &&
+                x.url.endsWith('/background.js')
+        )) {
+            const session = await attach(worker);
+            let matched = false;
+            try {
+                const manifest = JSON.parse(
+                    await evaluate(
+                        session,
+                        'JSON.stringify(chrome.runtime.getManifest())'
+                    )
+                );
+                workerObservations.add(
+                    `${worker.url}: ${manifest.name} ${manifest.version}`
+                );
+                matched = matchesExtension(manifest, expectedManifest);
+                if (matched) workerSession = session;
+            } catch (error) {
+                workerObservations.add(`${worker.url}: ${error.message}`);
+            }
+            if (matched) break;
+            await send('Target.detachFromTarget', { sessionId: session });
+        }
+        if (!workerSession) await sleep(250);
     }
-    const workerSession = await attach(worker);
-    const loadedName = await evaluate(
-        workerSession,
-        'chrome.runtime.getManifest().name'
-    );
-    if (loadedName !== 'Change Colors') {
+    if (!workerSession)
         throw new Error(
-            `Unexpected extension "${loadedName}" in ${CHROME}. Set CHROME_UNBRANDED to a Chromium build that loads this extension.`
+            `Could not find ${expectedManifest.name} ${expectedManifest.version} in ${CHROME}. Workers observed: ${[...workerObservations].join(' | ') || 'none'}`
         );
-    }
 
     // Explicitly create and activate the fixture tab; browser startup may leave
     // a welcome or blank tab active instead of the command-line URL.
