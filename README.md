@@ -13,6 +13,8 @@ Original source: https://github.com/Strav/Change-Colors
   gradients on elements and their `::before` / `::after` backgrounds are replaced
   with the selected background color, while ordinary image layers stay in place.
 - Preserve this setting in saved page decisions so newly added iframes receive it.
+- Remove stray injected styles after rapid redirects to excluded pages, including
+  when appearance settings change during navigation.
 - Add linting, formatting, shared-module type checks, pre-commit checks and CI.
   The release gate now runs `npm run check` before browser tests and packaging.
 

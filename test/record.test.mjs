@@ -14,6 +14,7 @@ import {
     documentsOfPage,
     isEmpty,
     pageOf,
+    prepareCommittedDocument,
     readRecord,
     setDecision,
     setSheets,
@@ -574,6 +575,56 @@ check(
     true
 );
 check('and one holding a stylesheet is not', isEmpty(sheets), false);
+
+const residual = readRecord(null);
+setSheets(residual, 'previous-document', ['old-css']);
+const residualBrowser = browser({
+    world: new Map([['excluded-document', ['old-css']]])
+});
+await syncPage(residualBrowser, 'excluded-document', decision(null), residual);
+check(
+    'an excluded incoming document loses stray CSS from an earlier document',
+    residualBrowser.held('excluded-document'),
+    []
+);
+check(
+    'stray CSS is claimed before it is removed',
+    residualBrowser.calls.slice(0, 2),
+    ['save', 'remove excluded-document']
+);
+check(
+    'the earlier document remains accounted for',
+    sheetsOf(residual, 'previous-document'),
+    ['old-css']
+);
+
+const refusedResidual = readRecord(null);
+setSheets(refusedResidual, 'previous', ['old-css']);
+const refusedResidualBrowser = browser({
+    acceptSaves: false,
+    world: new Map([['incoming', ['old-css']]])
+});
+await syncPage(
+    refusedResidualBrowser,
+    'incoming',
+    decision(null),
+    refusedResidual
+);
+check(
+    'failed persistence prevents stray CSS removal',
+    refusedResidualBrowser.held('incoming'),
+    ['old-css']
+);
+
+const knownDocument = readRecord(null);
+setSheets(knownDocument, 'previous', ['old-css']);
+setSheets(knownDocument, 'current', ['current-css']);
+prepareCommittedDocument(knownDocument, 'current');
+check(
+    'a tracked document keeps its exact stylesheet inventory',
+    sheetsOf(knownDocument, 'current'),
+    ['current-css']
+);
 
 const passed = results.filter(Boolean).length;
 console.log(`\n${passed}/${results.length} checks passed`);
