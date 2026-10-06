@@ -57,7 +57,7 @@ const {
     setOverride,
     toggleOverride,
     updateSettings
-} = await import('../common/settings.js');
+} = await import('../src/common/settings.js');
 
 const URL_A = 'https://example.com/a';
 const URL_B = 'https://example.com/b';

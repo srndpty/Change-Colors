@@ -84,7 +84,7 @@ function stubChrome({ stored = {}, createFails = false, report = null } = {}) {
 }
 
 // Imported once; the module keeps the "one migration at a time" promise.
-const { migrateLegacySettings } = await import('../common/migration.js');
+const { migrateLegacySettings } = await import('../src/common/migration.js');
 const TIMEOUT = 60;
 
 /* ------------------------------------------------ the document never opens */

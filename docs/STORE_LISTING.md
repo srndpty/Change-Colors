@@ -9,9 +9,9 @@ change to them means a new ZIP:
 
 | Field in the store | Comes from                                |
 | ------------------ | ----------------------------------------- |
-| Title              | `manifest.json` `name`                    |
-| Summary            | `manifest.json` `description`             |
-| Version            | `manifest.json` `version`                 |
+| Title              | `src/manifest.json` `name`                |
+| Summary            | `src/manifest.json` `description`         |
+| Version            | `src/manifest.json` `version`             |
 | Description        | typed into the dashboard - the text below |
 | Privacy answers    | typed into the dashboard - the text below |
 | Privacy policy URL | typed into the dashboard - see PRIVACY.md |
@@ -26,12 +26,12 @@ for a maintainer; none of that is true any more.
 Change Colors customizes the appearance of web pages for easier and more comfortable reading.
 
 Features:
-• Choose custom background, text, link, and visited-link colors
-• Choose a preferred font and font size
-• Show or hide images and embedded content
-• Apply settings globally, by domain, or to a single page
-• Toggle overrides from the toolbar or with keyboard shortcuts
-• Works with frames, dynamic pages, and open Shadow DOM
+窶｢ Choose custom background, text, link, and visited-link colors
+窶｢ Choose a preferred font and font size
+窶｢ Show or hide images and embedded content
+窶｢ Apply settings globally, by domain, or to a single page
+窶｢ Toggle overrides from the toolbar or with keyboard shortcuts
+窶｢ Works with frames, dynamic pages, and open Shadow DOM
 
 Version 3.0 has been rebuilt for Manifest V3 and includes major reliability, compatibility, and performance improvements.
 

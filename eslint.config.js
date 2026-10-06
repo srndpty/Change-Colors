@@ -8,7 +8,7 @@ export default [
             'build/**',
             'dist/**',
             'tmp/**',
-            'libs/**',
+            'src/libs/**',
             '**/.#*'
         ]
     },

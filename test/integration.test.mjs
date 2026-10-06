@@ -21,7 +21,7 @@ const PORT = 8127;
 // what ships, and only loading what ships can tell.
 const EXTENSION = process.env.EXTENSION_DIR
     ? path.resolve(process.env.EXTENSION_DIR)
-    : fileURLToPath(new URL('..', import.meta.url));
+    : fileURLToPath(new URL('../src/', import.meta.url));
 
 /**
  * Branded Google Chrome refuses `--load-extension`, so this test needs a
