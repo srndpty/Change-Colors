@@ -22,8 +22,8 @@ import {
     browserArgs,
     skipWithoutChrome
 } from './browser.mjs';
-import { DEFAULTS } from '../common/settings.js';
-import { buildCss, buildShadowCss } from '../common/css.js';
+import { DEFAULTS } from '../src/common/settings.js';
+import { buildCss, buildShadowCss } from '../src/common/css.js';
 
 const CHROME = findChrome();
 if (!CHROME) {
@@ -192,7 +192,7 @@ try {
     await evaluate(
         sessionId,
         fs.readFileSync(
-            fileURLToPath(new URL('../agent.js', import.meta.url)),
+            fileURLToPath(new URL('../src/agent.js', import.meta.url)),
             'utf8'
         )
     );

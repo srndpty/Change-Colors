@@ -6,6 +6,9 @@ open.
 
 ## Font detection - `libs/font_detect.js`
 
+Source location: `src/libs/font_detect.js` in the repository;
+`libs/font_detect.js` in the packaged extension.
+
 The file arrived with this notice, and still carries it word for word:
 
     JavaScript code to detect available availability of a

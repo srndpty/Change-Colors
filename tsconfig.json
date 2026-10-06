@@ -10,5 +10,5 @@
         "types": ["chrome"],
         "skipLibCheck": true
     },
-    "include": ["common/**/*.js"]
+    "include": ["src/common/**/*.js"]
 }

@@ -202,37 +202,31 @@ runs on Manifest V3, with the same features and the same settings.
 
 ## Layout
 
-| Path                        | Purpose                                                                                                                                            |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`             | Manifest V3 declaration                                                                                                                            |
-| `background.js`             | Service worker: decides and injects the styling                                                                                                    |
-| `common/settings.js`        | Settings model and override rules                                                                                                                  |
-| `popup.html/.js`            | Toolbar popup: per page, per domain and global override                                                                                            |
-| `options.html/.js`          | Preferences                                                                                                                                        |
-| `offscreen.html/.js`        | One-shot reader for version 2.x settings in `localStorage`                                                                                         |
-| `common/migration.js`       | Carries version 2.x settings over, retried until it works                                                                                          |
-| `common/record.js`          | What a tab knows                                                                                                                                   |
-| `common/sync.js`            | Bringing documents in line, in an order that cannot strand a stylesheet                                                                            |
-| `common/css.js`             | Stylesheet generation, for the document and for shadow roots                                                                                       |
-| `agent.js`                  | Styles shadow trees and tags the elements with a background of their own, injected on demand                                                       |
-| `libs/font_detect.js`       | Detects which fonts the system has                                                                                                                 |
-| `test/record.test.mjs`      | What a tab knows, and what it does when it cannot write it down                                                                                    |
-| `test/migration.test.mjs`   | The 2.x settings migration against stubbed chrome APIs                                                                                             |
-| `test/prerender-demo.mjs`   | Serves the pages for checking prerendering by hand                                                                                                 |
-| `test/css.test.mjs`         | Runs the generated CSS through headless Chrome                                                                                                     |
-| `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
-| `test/perf.test.mjs`        | Guards style recalculation and script cost on a synthetic busy page                                                                                |
-| `test/settings.test.mjs`    | Checks that each override button does what its label says, and that two changes at once do not lose one                                            |
-| `tools/stage.mjs`           | Copies the files that ship into `build/`                                                                                                           |
-| `tools/release.mjs`         | The release gate: versions, tests, `build/` under test, the ZIP and its hash                                                                       |
-| `tools/zip.mjs`             | Writes that ZIP, reproducibly                                                                                                                      |
-| `STORE_LISTING.md`          | The text of the store listing, and where each field comes from                                                                                     |
-| `PRIVACY.md`                | The privacy policy the listing links to                                                                                                            |
-| `THIRD_PARTY_NOTICES.md`    | What is somebody else's, under what license, and what was changed                                                                                  |
+The repository separates extension sources, tests, tooling and publication docs.
+The paths inside `src/` are also the paths inside the installed extension.
+
+| Path                                     | Purpose                                                                 |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| `src/manifest.json`                      | Manifest V3 declaration                                                 |
+| `src/background.js`                      | Service worker: decides and injects styling                             |
+| `src/agent.js`                           | Injected page agent for shadow trees and background detection           |
+| `src/common/`                            | Shared settings, migration, records, synchronization and CSS generation |
+| `src/popup.html`, `src/popup.js`         | Toolbar popup                                                           |
+| `src/options.html`, `src/options.js`     | Preferences                                                             |
+| `src/offscreen.html`, `src/offscreen.js` | Reader for legacy settings in `localStorage`                            |
+| `src/css/`                               | Popup and preferences stylesheets                                       |
+| `src/icons/`                             | Extension icons and UI images                                           |
+| `src/libs/`                              | Third-party font detection library                                      |
+| `test/`                                  | Unit, browser and performance tests, browser helpers and prerender demo |
+| `tools/`                                 | Staging, release checks and reproducible ZIP generation                 |
+| `docs/`                                  | Store listing, privacy policy and third-party notices                   |
+| `.github/workflows/`                     | CI quality checks                                                       |
+| `build/`                                 | Generated unpacked extension (ignored by Git)                           |
+| `dist/`                                  | Generated release ZIPs (ignored by Git)                                 |
 
 ## Development
 
-Load the folder as an unpacked extension from `chrome://extensions` with
+Load the `src/` folder as an unpacked extension from `chrome://extensions` with
 developer mode enabled.
 
 The stylesheet is checked against a real layout in headless Chrome, and the
@@ -279,9 +273,9 @@ than through a public license - so keep that correspondence: it is the only
 record of the permission, and it is what would be produced if the store or
 anyone else asked under what right this is published.
 
-`libs/font_detect.js` is somebody else's work under a license that does say so -
+`src/libs/font_detect.js` is somebody else's work under a license that does say so -
 Creative Commons Attribution-ShareAlike 2.5 - and stays under it. It keeps its
-author's notice in the file, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+author's notice in the file, and [THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
 says what was changed in it. That file ships with the extension.
 
 ## Development checks
@@ -292,10 +286,10 @@ Use Node.js 22.13 or newer and run `npm ci`. Dependencies are pinned in
 - `npm run check`: ESLint, Prettier check, shared-module type check, and unit tests.
 - `npm run format`: format maintained source, tests, and documentation.
 - `npm run test:browser`: Chrome layout tests and Chromium extension integration tests.
-- `npm run typecheck`: check `common/` JavaScript without compiling or emitting files.
+- `npm run typecheck`: check `src/common/` JavaScript without compiling or emitting files.
 
 Type checking starts with shared modules and JSDoc settings types. It is not yet
-strict checking of the entire extension. Third-party `libs/` files and generated
+strict checking of the entire extension. Third-party `src/libs/` files and generated
 `build/`, `dist/`, and `tmp/` files are excluded from linting and formatting.
 
 Pre-commit checks staged files with ESLint and Prettier without rewriting or
@@ -339,7 +333,8 @@ gone from the tree for the same reason. It is still in the history:
 npm run stage
 ```
 
-copies the files the extension is actually made of into `build/`, from a list
+copies the extension files from `src/` and the third-party notices from `docs/`
+into `build/`, from a list
 in `tools/stage.mjs`, and checks that everything the manifest names is among
 them. `build/` is written, never edited: work in the source, check the release
 in `build/`.
@@ -352,7 +347,7 @@ npm run release
 ```
 
 is everything that has to be true before uploading one, in order: the versions
-in `package.json` and `manifest.json` agree, `npm run check` passes (lint,
+in `package.json` and `src/manifest.json` agree, `npm run check` passes (lint,
 formatting, types and unit tests), every browser test passes, `build/` is
 staged, **the integration test is run again against `build/` itself**, and the
 ZIP is written to `dist/` with its SHA-256 and the commit it was built from
@@ -360,7 +355,7 @@ printed. Upload that file from the Package tab of the developer dashboard.
 
 The step that earns its place is the second integration run. The staging list
 can be complete as far as the manifest is concerned and still miss a module
-that another module imports: loaded from the source root that extension works
+that another module imports: loaded from `src/` that extension works
 perfectly, and only the packaged one is broken. During that run - and only that
 run - `$REQUIRE_BROWSER` makes a missing browser a failure instead of a skip,
 because "the tests did not fail" has to mean "the tests ran".
@@ -373,6 +368,6 @@ uploaded.
 
 What the store asks for besides the ZIP - the description, the single-purpose
 statement, a justification for each permission, the data-usage answers - is
-written out in [STORE_LISTING.md](STORE_LISTING.md), and the privacy policy the
-listing has to link to is [PRIVACY.md](PRIVACY.md). The policy needs a public
+written out in [STORE_LISTING.md](docs/STORE_LISTING.md), and the privacy policy the
+listing has to link to is [PRIVACY.md](docs/PRIVACY.md). The policy needs a public
 HTTPS URL and has three things left to fill in before it can have one.

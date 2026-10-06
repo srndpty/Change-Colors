@@ -9,7 +9,7 @@
 //
 // The step that matters most is the integration test being pointed at `build/`.
 // The staging list can be complete as far as the manifest is concerned and
-// still miss a module some other module imports; loaded from the source root
+// still miss a module some other module imports; loaded from src/
 // that extension works perfectly, and only the staged one is broken. So the
 // browser is given the staged one, and $REQUIRE_BROWSER says a run that found
 // no browser is a failure rather than a skip - at this point, "the tests did
@@ -74,13 +74,13 @@ const pkg = JSON.parse(
     fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')
 );
 const manifest = JSON.parse(
-    fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8')
+    fs.readFileSync(path.join(ROOT, 'src', 'manifest.json'), 'utf8')
 );
 console.log(
-    `=== version\npackage.json ${pkg.version}, manifest.json ${manifest.version}`
+    `=== version\npackage.json ${pkg.version}, src/manifest.json ${manifest.version}`
 );
 if (pkg.version !== manifest.version) {
-    fail('package.json and manifest.json disagree about the version');
+    fail('package.json and src/manifest.json disagree about the version');
 }
 if (!/^\d+\.\d+(\.\d+)?(\.\d+)?$/.test(manifest.version)) {
     fail(`the store will not take "${manifest.version}" as a version`);
@@ -159,4 +159,4 @@ Two things this cannot check:
   npm run demo:prerender prints the steps.
 - The listing beside the package: description, single purpose, a justification
   per permission, the data-usage answers, and a public URL for the privacy
-  policy. STORE_LISTING.md holds the text and PRIVACY.md the policy.`);
+  policy. docs/STORE_LISTING.md holds the text and docs/PRIVACY.md the policy.`);

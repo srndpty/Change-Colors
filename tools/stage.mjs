@@ -1,7 +1,7 @@
 // Builds the directory that gets packed, rather than packing the one we work
 // in.
 //
-// The extension root holds things that are not the extension: the tests, the
+// The repository root holds things that are not the extension: the tests, the
 // tools, the editor's project file. None of it runs once installed, and that is
 // exactly what makes it worth leaving out: a reviewer at the store, or anyone
 // auditing what was shipped, cannot tell dormant code from live code by reading
@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const SOURCE = path.join(ROOT, 'src');
 const OUT = path.join(ROOT, 'build');
 
 /** Every file the installed extension is made of, and nothing else. */
@@ -52,7 +53,10 @@ const SHIPPED = [
 fs.rmSync(OUT, { recursive: true, force: true });
 let bytes = 0;
 for (const file of SHIPPED) {
-    const from = path.join(ROOT, file);
+    const from =
+        file === 'THIRD_PARTY_NOTICES.md'
+            ? path.join(ROOT, 'docs', file)
+            : path.join(SOURCE, file);
     if (!fs.existsSync(from)) {
         console.error(`missing: ${file}`);
         process.exit(1);

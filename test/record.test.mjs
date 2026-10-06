@@ -19,8 +19,8 @@ import {
     setDecision,
     setSheets,
     sheetsOf
-} from '../common/record.js';
-import { syncCommittedFrame, syncPage } from '../common/sync.js';
+} from '../src/common/record.js';
+import { syncCommittedFrame, syncPage } from '../src/common/sync.js';
 
 const results = [];
 function check(name, actual, expected) {
