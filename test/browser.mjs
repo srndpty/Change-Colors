@@ -80,16 +80,117 @@ export function skipWithoutChrome(what) {
 }
 
 /**
- * Turns a browser that cannot be started into a stated failure. Without this
- * the process dies on an unhandled 'error' event, or - worse - waits for a
- * target that will never appear.
+ * Linux CI runners may prohibit Chromium's user-namespace sandbox. Disable it
+ * only there, for browsers that load the local test fixtures.
  */
-export function reportLaunchFailure(child, chromePath, onFailure) {
-    child.on('error', function (error) {
-        console.log(`FAIL  could not start ${chromePath} -> ${error.message}`);
-        if (onFailure) {
-            onFailure();
-        }
-        process.exit(1);
+export function browserArgs(env = process.env, platform = process.platform) {
+    return env.CI && platform === 'linux' ? ['--no-sandbox'] : [];
+}
+
+/** Bounded DevTools pipe transport shared by all browser tests. */
+export function connectBrowser(
+    child,
+    chromePath,
+    {
+        timeoutMs = 30000,
+        totalTimeoutMs = 300000,
+        onEvent = () => {},
+        onFailure = () => {},
+        log = console.error
+    } = {}
+) {
+    let nextId = 0;
+    let buffer = Buffer.alloc(0);
+    let stderr = '';
+    let failure = null;
+    const pending = new Map();
+    log(`Browser: ${chromePath}`);
+    child.stdout?.resume();
+    child.stderr?.on('data', (chunk) => {
+        stderr = (stderr + chunk.toString()).slice(-16000);
     });
+    function fail(reason) {
+        if (failure) return;
+        failure = new Error(reason);
+        log(`FAIL  ${reason}${stderr ? '\nChromium stderr:\n' + stderr : ''}`);
+        for (const request of pending.values()) {
+            clearTimeout(request.timer);
+            request.reject(failure);
+        }
+        pending.clear();
+    }
+    child.on('error', (error) =>
+        fail(`Could not start ${chromePath}: ${error.message}`)
+    );
+    child.on('exit', (code, signal) =>
+        fail(`Chromium exited (code=${code}, signal=${signal})`)
+    );
+    child.stdio[3].on('error', (error) =>
+        fail(`DevTools write pipe: ${error.message}`)
+    );
+    child.stdio[4].on('error', (error) =>
+        fail(`DevTools read pipe: ${error.message}`)
+    );
+    child.stdio[4].on('end', () => fail('Chromium closed its DevTools pipe'));
+    child.stdio[4].on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        let end;
+        while ((end = buffer.indexOf(0)) !== -1) {
+            const raw = buffer.subarray(0, end).toString();
+            buffer = buffer.subarray(end + 1);
+            let message;
+            try {
+                message = JSON.parse(raw);
+            } catch {
+                fail('Invalid JSON from Chromium DevTools');
+                return;
+            }
+            const request = pending.get(message.id);
+            if (request) {
+                clearTimeout(request.timer);
+                pending.delete(message.id);
+                if (message.error)
+                    request.reject(
+                        new Error(`${request.method}: ${message.error.message}`)
+                    );
+                else request.resolve(message);
+            } else if (message.method) onEvent(message);
+        }
+    });
+    const deadline =
+        totalTimeoutMs > 0
+            ? setTimeout(() => {
+                  fail(`Browser test exceeded ${totalTimeoutMs / 1000}s`);
+                  child.kill();
+                  onFailure();
+                  process.exit(1);
+              }, totalTimeoutMs)
+            : null;
+    deadline?.unref();
+    function send(method, params = {}, sessionId) {
+        if (failure) return Promise.reject(failure);
+        const id = ++nextId;
+        const message = { id, method, params };
+        if (sessionId) message.sessionId = sessionId;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(
+                () => fail(`DevTools ${method} timed out after ${timeoutMs}ms`),
+                timeoutMs
+            );
+            pending.set(id, { resolve, reject, timer, method });
+            child.stdio[3].write(JSON.stringify(message) + '\0', (error) => {
+                if (error) fail(`DevTools ${method}: ${error.message}`);
+            });
+        });
+    }
+    function dispose() {
+        clearTimeout(deadline);
+        if (!failure) failure = new Error('Browser connection disposed');
+        for (const request of pending.values()) {
+            clearTimeout(request.timer);
+            request.reject(failure);
+        }
+        pending.clear();
+    }
+    return { send, dispose };
 }

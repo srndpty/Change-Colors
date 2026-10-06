@@ -309,6 +309,13 @@ Set `REQUIRE_BROWSER=1` to require both tests to run. If the selected browser lo
 an unexpected extension, choose a different Chromium build with
 `CHROME_UNBRANDED`. CI downloads its pinned Playwright Chromium automatically.
 
+Browser commands fail after 30 seconds without a DevTools response, and each
+browser test process has a five-minute limit. Browser exits, pipe errors and
+timeouts report the executable path and the last 16 KB of Chromium stderr.
+Linux CI uses `--no-sandbox`; local runs retain the normal sandbox. The browser
+test step in CI has a 12-minute limit and the complete browser job has a
+20-minute limit, including Chromium installation.
+
 ## Packaging
 
 The folder that is worked in is not the folder that ships. It also holds the

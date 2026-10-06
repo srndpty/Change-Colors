@@ -18,7 +18,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     findChrome,
-    reportLaunchFailure,
+    connectBrowser,
+    browserArgs,
     skipWithoutChrome
 } from './browser.mjs';
 import { DEFAULTS } from '../common/settings.js';
@@ -118,6 +119,7 @@ const chrome = spawn(
     CHROME,
     [
         '--headless=new',
+        ...browserArgs(),
         '--remote-debugging-pipe',
         `--user-data-dir=${profile}`,
         '--window-size=1280,900',
@@ -128,31 +130,10 @@ const chrome = spawn(
     ],
     { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] }
 );
-reportLaunchFailure(chrome, CHROME, () => server.close());
-
-let nextId = 0;
-const pending = new Map();
-let buffer = Buffer.alloc(0);
-chrome.stdio[4].on('data', (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    let end;
-    while ((end = buffer.indexOf(0)) !== -1) {
-        const raw = buffer.subarray(0, end).toString();
-        buffer = buffer.subarray(end + 1);
-        const msg = JSON.parse(raw);
-        if (msg.id && pending.has(msg.id)) {
-            pending.get(msg.id)(msg);
-            pending.delete(msg.id);
-        }
-    }
+const connection = connectBrowser(chrome, CHROME, {
+    onFailure: () => server.close()
 });
-function send(method, params = {}, sessionId) {
-    const id = ++nextId;
-    const m = { id, method, params };
-    if (sessionId) m.sessionId = sessionId;
-    chrome.stdio[3].write(JSON.stringify(m) + '\0');
-    return new Promise((r) => pending.set(id, r));
-}
+const { send } = connection;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function evaluate(sessionId, expression) {
     const r = await send(
@@ -256,6 +237,7 @@ try {
     console.log('FAIL  perf run -> ' + e);
     failed = true;
 } finally {
+    connection.dispose();
     chrome.kill();
     server.close();
     process.exit(failed ? 1 : 0);
