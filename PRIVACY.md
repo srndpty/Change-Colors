@@ -9,14 +9,14 @@ selected by the user.
 
 Change Colors handles the following information locally on the user's device:
 
-* The URL and domain of the current page, solely to determine whether global,
+- The URL and domain of the current page, solely to determine whether global,
   domain-specific, or page-specific styling should be applied.
-* Website structure and styling information, such as DOM elements, computed
+- Website structure and styling information, such as DOM elements, computed
   styles, frames, and open Shadow DOM, solely to apply and remove the user's
   selected appearance settings.
-* User preferences, including colors, fonts, font size, image visibility, and
+- User preferences, including colors, fonts, font size, image visibility, and
   override rules.
-* Temporary document and tab identifiers needed to safely remove styles
+- Temporary document and tab identifiers needed to safely remove styles
   previously inserted by the extension.
 
 ## Storage and retention
@@ -53,6 +53,6 @@ customization functionality.
 
 For privacy questions, contact:
 
-* clair
-* q8xz-safe001@yahoo.co.jp
-* https://github.com/srndpty/Change-Colors
+- clair
+- q8xz-safe001@yahoo.co.jp
+- https://github.com/srndpty/Change-Colors

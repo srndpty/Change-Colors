@@ -7,6 +7,15 @@ Original source: https://github.com/Strav/Change-Colors
 
 ## Release notes
 
+### 3.0.1 - Optional gradient backgrounds and quality checks
+
+- Add "Override gradient backgrounds", off by default. When enabled, CSS
+  gradients on elements and their `::before` / `::after` backgrounds are replaced
+  with the selected background color, while ordinary image layers stay in place.
+- Preserve this setting in saved page decisions so newly added iframes receive it.
+- Add linting, formatting, shared-module type checks, pre-commit checks and CI.
+  The release gate now runs `npm run check` before browser tests and packaging.
+
 ### 3.0.0 - Manifest V3
 
 The extension was stuck on Manifest V2 and stopped being distributable. It now
@@ -63,8 +72,8 @@ runs on Manifest V3, with the same features and the same settings.
   The mark only comes off if the document answered: one that could not be reached
   is still one whose contents nobody knows, and it stays uncertain until someone
   reaches it.
-- The service worker keeps what a page *should* have separate from what each
-  document is known to *have*. A stylesheet is recorded only by an `insertCSS`
+- The service worker keeps what a page _should_ have separate from what each
+  document is known to _have_. A stylesheet is recorded only by an `insertCSS`
   that succeeded and taken off only by a `removeCSS` that succeeded, and each
   call covers exactly one document, so there is no partial success to misread: an
   injection that failed is retried instead of being remembered as done, and a
@@ -191,33 +200,33 @@ runs on Manifest V3, with the same features and the same settings.
 
 ## Layout
 
-| Path                 | Purpose                                                   |
-| -------------------- | --------------------------------------------------------- |
-| `manifest.json`      | Manifest V3 declaration                                    |
-| `background.js`      | Service worker: decides and injects the styling            |
-| `common/settings.js` | Settings model and override rules                          |
-| `popup.html/.js`     | Toolbar popup: per page, per domain and global override    |
-| `options.html/.js`   | Preferences                                                |
-| `offscreen.html/.js` | One-shot reader for version 2.x settings in `localStorage` |
-| `common/migration.js`| Carries version 2.x settings over, retried until it works   |
-| `common/record.js`   | What a tab knows                                           |
-| `common/sync.js`     | Bringing documents in line, in an order that cannot strand a stylesheet |
-| `common/css.js`      | Stylesheet generation, for the document and for shadow roots |
-| `agent.js`           | Styles shadow trees and tags the elements with a background of their own, injected on demand |
-| `libs/font_detect.js`| Detects which fonts the system has                         |
-| `test/record.test.mjs` | What a tab knows, and what it does when it cannot write it down |
-| `test/migration.test.mjs` | The 2.x settings migration against stubbed chrome APIs |
-| `test/prerender-demo.mjs` | Serves the pages for checking prerendering by hand |
-| `test/css.test.mjs`  | Runs the generated CSS through headless Chrome             |
+| Path                        | Purpose                                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest.json`             | Manifest V3 declaration                                                                                                                            |
+| `background.js`             | Service worker: decides and injects the styling                                                                                                    |
+| `common/settings.js`        | Settings model and override rules                                                                                                                  |
+| `popup.html/.js`            | Toolbar popup: per page, per domain and global override                                                                                            |
+| `options.html/.js`          | Preferences                                                                                                                                        |
+| `offscreen.html/.js`        | One-shot reader for version 2.x settings in `localStorage`                                                                                         |
+| `common/migration.js`       | Carries version 2.x settings over, retried until it works                                                                                          |
+| `common/record.js`          | What a tab knows                                                                                                                                   |
+| `common/sync.js`            | Bringing documents in line, in an order that cannot strand a stylesheet                                                                            |
+| `common/css.js`             | Stylesheet generation, for the document and for shadow roots                                                                                       |
+| `agent.js`                  | Styles shadow trees and tags the elements with a background of their own, injected on demand                                                       |
+| `libs/font_detect.js`       | Detects which fonts the system has                                                                                                                 |
+| `test/record.test.mjs`      | What a tab knows, and what it does when it cannot write it down                                                                                    |
+| `test/migration.test.mjs`   | The 2.x settings migration against stubbed chrome APIs                                                                                             |
+| `test/prerender-demo.mjs`   | Serves the pages for checking prerendering by hand                                                                                                 |
+| `test/css.test.mjs`         | Runs the generated CSS through headless Chrome                                                                                                     |
 | `test/integration.test.mjs` | Drives the loaded extension: navigation, sub frames, redirects, the back/forward cache (restore asserted, not assumed), bursts of settings changes |
-| `test/perf.test.mjs` | Guards style recalculation and script cost on a synthetic busy page |
-| `test/settings.test.mjs` | Checks that each override button does what its label says, and that two changes at once do not lose one |
-| `tools/stage.mjs`    | Copies the files that ship into `build/`                   |
-| `tools/release.mjs`  | The release gate: versions, tests, `build/` under test, the ZIP and its hash |
-| `tools/zip.mjs`      | Writes that ZIP, reproducibly                              |
-| `STORE_LISTING.md`   | The text of the store listing, and where each field comes from |
-| `PRIVACY.md`         | The privacy policy the listing links to                    |
-| `THIRD_PARTY_NOTICES.md` | What is somebody else's, under what license, and what was changed |
+| `test/perf.test.mjs`        | Guards style recalculation and script cost on a synthetic busy page                                                                                |
+| `test/settings.test.mjs`    | Checks that each override button does what its label says, and that two changes at once do not lose one                                            |
+| `tools/stage.mjs`           | Copies the files that ship into `build/`                                                                                                           |
+| `tools/release.mjs`         | The release gate: versions, tests, `build/` under test, the ZIP and its hash                                                                       |
+| `tools/zip.mjs`             | Writes that ZIP, reproducibly                                                                                                                      |
+| `STORE_LISTING.md`          | The text of the store listing, and where each field comes from                                                                                     |
+| `PRIVACY.md`                | The privacy policy the listing links to                                                                                                            |
+| `THIRD_PARTY_NOTICES.md`    | What is somebody else's, under what license, and what was changed                                                                                  |
 
 ## Development
 
@@ -273,6 +282,47 @@ Creative Commons Attribution-ShareAlike 2.5 - and stays under it. It keeps its
 author's notice in the file, and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 says what was changed in it. That file ships with the extension.
 
+## Development checks
+
+Use Node.js 22.13 or newer and run `npm ci`. Dependencies are pinned in
+`package-lock.json`; the install also enables the Husky pre-commit hook.
+
+- `npm run check`: ESLint, Prettier check, shared-module type check, and unit tests.
+- `npm run format`: format maintained source, tests, and documentation.
+- `npm run test:browser`: Chrome layout tests and Chromium extension integration tests.
+- `npm run typecheck`: check `common/` JavaScript without compiling or emitting files.
+
+Type checking starts with shared modules and JSDoc settings types. It is not yet
+strict checking of the entire extension. Third-party `libs/` files and generated
+`build/`, `dist/`, and `tmp/` files are excluded from linting and formatting.
+
+Pre-commit checks staged files with ESLint and Prettier without rewriting or
+staging changes. Run `npm run format` and stage the result if formatting fails.
+Full unit and browser tests run in `.github/workflows/quality.yml` on pushes and
+pull requests. Browser jobs require Chromium and also test the staged extension;
+a missing browser fails rather than silently skipping. Performance tests remain
+part of the release gate (`npm run test:perf` can run them separately).
+
+For local browser tests, set `CHROME` to a Chrome/Chromium executable and
+`CHROME_UNBRANDED` to a Chromium executable that accepts `--load-extension`.
+Set `REQUIRE_BROWSER=1` to require both tests to run. If the selected browser loads
+an unexpected extension, choose a different Chromium build with
+`CHROME_UNBRANDED`. CI downloads its pinned Playwright Chromium automatically.
+
+Playwright is pinned to 1.61.0 (Chromium revision 1228), the build validated for
+extension integration tests. Revision 1243 returned an unrelated `google.com`
+manifest in local and CI runs. Revalidate extension loading before upgrading
+this dependency. Tests prefer the pinned Playwright executable over arbitrary
+cache entries and select the worker by manifest name, version and manifest
+version rather than only its script filename.
+
+Browser commands fail after 30 seconds without a DevTools response, and each
+browser test process has a five-minute limit. Browser exits, pipe errors and
+timeouts report the executable path and the last 16 KB of Chromium stderr.
+Linux CI uses `--no-sandbox`; local runs retain the normal sandbox. The browser
+test step in CI has a 12-minute limit and the complete browser job has a
+20-minute limit, including Chromium installation.
+
 ## Packaging
 
 The folder that is worked in is not the folder that ships. It also holds the
@@ -300,7 +350,8 @@ npm run release
 ```
 
 is everything that has to be true before uploading one, in order: the versions
-in `package.json` and `manifest.json` agree, every test passes, `build/` is
+in `package.json` and `manifest.json` agree, `npm run check` passes (lint,
+formatting, types and unit tests), every browser test passes, `build/` is
 staged, **the integration test is run again against `build/` itself**, and the
 ZIP is written to `dist/` with its SHA-256 and the commit it was built from
 printed. Upload that file from the Package tab of the developer dashboard.

@@ -5,13 +5,14 @@
 // navigations, sub frames and the storage writes the options page makes on
 // every `input` event are all its business, and that is where a tab can end up
 // with a stylesheet nothing is able to remove any more.
-import {spawn} from 'node:child_process';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {reportLaunchFailure} from './browser.mjs';
+import { fileURLToPath } from 'node:url';
+import { connectBrowser, browserArgs, matchesExtension } from './browser.mjs';
+import { chromium } from 'playwright';
 
 const PORT = 8127;
 // What gets loaded into the browser. The release gate points this at `build/`,
@@ -32,13 +33,15 @@ function findBrowser() {
     if (process.env.CHROME_UNBRANDED) {
         candidates.push(process.env.CHROME_UNBRANDED);
     }
+    candidates.push(chromium.executablePath());
     const caches = [
-        process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright'),
+        process.env.LOCALAPPDATA &&
+            path.join(process.env.LOCALAPPDATA, 'ms-playwright'),
         path.join(os.homedir(), '.cache', 'ms-playwright'),
         path.join(os.homedir(), '.cache', 'puppeteer')
     ].filter(Boolean);
     for (const cache of caches) {
-        let entries = [];
+        let entries;
         try {
             entries = fs.readdirSync(cache).sort().reverse();
         } catch (e) {
@@ -48,30 +51,47 @@ function findBrowser() {
             if (!/^chrom/.test(entry) || /headless_shell/.test(entry)) {
                 continue;
             }
-            for (const inner of ['chrome-win64', 'chrome-win', 'chrome-linux', 'chrome-mac']) {
-                for (const binary of ['chrome.exe', 'chrome', 'Chromium.app/Contents/MacOS/Chromium']) {
+            for (const inner of [
+                'chrome-win64',
+                'chrome-win',
+                'chrome-linux',
+                'chrome-mac'
+            ]) {
+                for (const binary of [
+                    'chrome.exe',
+                    'chrome',
+                    'Chromium.app/Contents/MacOS/Chromium'
+                ]) {
                     candidates.push(path.join(cache, entry, inner, binary));
                 }
             }
         }
     }
-    return candidates.find(candidate => fs.existsSync(candidate)) || null;
+    return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 const CHROME = findBrowser();
 if (!CHROME) {
-    const how = 'Point $CHROME_UNBRANDED at one, or run `npx playwright install chromium`.';
+    const how =
+        'Point $CHROME_UNBRANDED at one, or run `npx playwright install chromium`.';
     if (process.env.REQUIRE_BROWSER) {
-        console.log('FAIL  integration test: no Chromium that accepts --load-extension was');
-        console.log('      found, and $REQUIRE_BROWSER says this one had to run. ' + how);
+        console.log(
+            'FAIL  integration test: no Chromium that accepts --load-extension was'
+        );
+        console.log(
+            '      found, and $REQUIRE_BROWSER says this one had to run. ' + how
+        );
         process.exit(1);
     }
-    console.log('SKIP  integration test: no Chromium that accepts --load-extension was found.');
+    console.log(
+        'SKIP  integration test: no Chromium that accepts --load-extension was found.'
+    );
     console.log('      ' + how);
     process.exit(0);
 }
 
 const FRAME = `<!doctype html><html><body style="background:#ffffff;color:#111">
+<div id="frameGradient" style="background-image:linear-gradient(white,gray)">gradient</div>
 <p id="p">framed</p>
 <div id="frameOverlay" style="position:absolute;inset:0"></div>
 </body></html>`;
@@ -126,66 +146,64 @@ const PLAIN = `<!doctype html><html><body style="background:#ffffff;color:#111">
 <p id="p">plain</p>
 </body></html>`;
 
-const server = http.createServer((req, res) => {
-    const body = req.url.startsWith('/frame') ? FRAME :
-        req.url.startsWith('/big') ? BIG :
-        req.url.startsWith('/redirect') ? REDIRECT :
-        req.url.startsWith('/plain') ? PLAIN :
-        req.url.startsWith('/speculate') ? SPECULATE :
-        req.url.startsWith('/prerendered') ? PRERENDERED : PAGE;
-    res.writeHead(200, {'Content-Type': 'text/html'});
-    res.end(body);
-}).listen(PORT);
+const server = http
+    .createServer((req, res) => {
+        const body = req.url.startsWith('/frame')
+            ? FRAME
+            : req.url.startsWith('/big')
+              ? BIG
+              : req.url.startsWith('/redirect')
+                ? REDIRECT
+                : req.url.startsWith('/plain')
+                  ? PLAIN
+                  : req.url.startsWith('/speculate')
+                    ? SPECULATE
+                    : req.url.startsWith('/prerendered')
+                      ? PRERENDERED
+                      : PAGE;
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(body);
+    })
+    .listen(PORT);
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-int-'));
-const chrome = spawn(CHROME, [
-    '--headless=new',
-    '--remote-debugging-pipe',
-    `--user-data-dir=${profile}`,
-    `--disable-extensions-except=${EXTENSION}`,
-    `--load-extension=${EXTENSION}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    `http://localhost:${PORT}/`
-], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
-reportLaunchFailure(chrome, CHROME, () => server.close());
-console.log(`      (extension loaded from ${EXTENSION})`);
-
-let nextId = 0;
-const pending = new Map();
-// What the browser says about pages it was asked to prerender, by url. A page
-// being prerendered is not in the target list and cannot be attached to, so
-// this is the only way to know whether one exists.
+const chrome = spawn(
+    CHROME,
+    [
+        '--headless=new',
+        ...browserArgs(),
+        '--remote-debugging-pipe',
+        `--user-data-dir=${profile}`,
+        `--disable-extensions-except=${EXTENSION}`,
+        `--load-extension=${EXTENSION}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        `http://localhost:${PORT}/`
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] }
+);
 const prerenders = new Map();
-let buffer = Buffer.alloc(0);
-chrome.stdio[4].on('data', chunk => {
-    buffer = Buffer.concat([buffer, chunk]);
-    let end;
-    while ((end = buffer.indexOf(0)) !== -1) {
-        const raw = buffer.subarray(0, end).toString();
-        buffer = buffer.subarray(end + 1);
-        const msg = JSON.parse(raw);
-        if (msg.id && pending.has(msg.id)) {
-            pending.get(msg.id)(msg);
-            pending.delete(msg.id);
-        } else if (msg.method === 'Preload.prerenderStatusUpdated') {
-            prerenders.set(msg.params.key.url, msg.params.status);
-        }
+console.log(`Extension: ${EXTENSION}`);
+const connection = connectBrowser(chrome, CHROME, {
+    onFailure: () => server.close(),
+    onEvent: (message) => {
+        if (message.method === 'Preload.prerenderStatusUpdated')
+            prerenders.set(message.params.key.url, message.params.status);
     }
 });
-function send(method, params = {}, sessionId) {
-    const id = ++nextId;
-    const m = {id, method, params};
-    if (sessionId) m.sessionId = sessionId;
-    chrome.stdio[3].write(JSON.stringify(m) + '\0');
-    return new Promise(r => pending.set(id, r));
-}
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const { send } = connection;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function evaluate(sessionId, expression) {
-    const r = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true}, sessionId);
+    const r = await send(
+        'Runtime.evaluate',
+        { expression, awaitPromise: true, returnByValue: true },
+        sessionId
+    );
     if (r.result.exceptionDetails) {
-        throw new Error(JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300));
+        throw new Error(
+            JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300)
+        );
     }
     return r.result.result.value;
 }
@@ -201,7 +219,12 @@ async function findTarget(match) {
 }
 
 async function attach(target) {
-    const {result: {sessionId}} = await send('Target.attachToTarget', {targetId: target.targetId, flatten: true});
+    const {
+        result: { sessionId }
+    } = await send('Target.attachToTarget', {
+        targetId: target.targetId,
+        flatten: true
+    });
     await send('Runtime.enable', {}, sessionId);
     return sessionId;
 }
@@ -218,7 +241,9 @@ async function attach(target) {
 async function openPage(match, timeout = 15000) {
     const until = Date.now() + timeout;
     for (;;) {
-        const target = await findTarget(x => x.type === 'page' && x.url.includes(match));
+        const target = await findTarget(
+            (x) => x.type === 'page' && x.url.includes(match)
+        );
         if (target) {
             const session = await attach(target);
             try {
@@ -248,7 +273,10 @@ async function settles(read, expected, timeout = 8000) {
     let seen;
     for (;;) {
         seen = await read();
-        if (JSON.stringify(seen) === JSON.stringify(expected) || Date.now() > until) {
+        if (
+            JSON.stringify(seen) === JSON.stringify(expected) ||
+            Date.now() > until
+        ) {
             return seen;
         }
         await sleep(250);
@@ -261,7 +289,11 @@ function check(name, actual, expected) {
         ? JSON.stringify(actual) === JSON.stringify(expected)
         : actual === expected;
     results.push(ok);
-    console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (ok ? '' : `  -> got ${actual}, expected ${expected}`));
+    console.log(
+        (ok ? 'PASS  ' : 'FAIL  ') +
+            name +
+            (ok ? '' : `  -> got ${actual}, expected ${expected}`)
+    );
 }
 
 const WHITE = 'rgb(255, 255, 255)';
@@ -271,58 +303,168 @@ const TEXT = 'rgb(232, 232, 232)';
 
 try {
     await sleep(3000);
-    const worker = await findTarget(x => x.type === 'service_worker' && x.url.endsWith('/background.js'));
-    if (!worker) {
-        const t = await send('Target.getTargets');
-        throw new Error('the extension service worker never showed up: ' +
-            (t.result.targetInfos || []).map(x => x.type + ' ' + x.url).join(' | '));
+    const expectedManifest = JSON.parse(
+        fs.readFileSync(path.join(EXTENSION, 'manifest.json'), 'utf8')
+    );
+    const workerObservations = new Set();
+    let workerSession;
+    for (let attempt = 0; attempt < 40 && !workerSession; attempt++) {
+        const targets = await send('Target.getTargets');
+        for (const worker of targets.result.targetInfos.filter(
+            (x) =>
+                x.type === 'service_worker' &&
+                x.url.startsWith('chrome-extension://') &&
+                x.url.endsWith('/background.js')
+        )) {
+            const session = await attach(worker);
+            let matched = false;
+            try {
+                const manifest = JSON.parse(
+                    await evaluate(
+                        session,
+                        'JSON.stringify(chrome.runtime.getManifest())'
+                    )
+                );
+                workerObservations.add(
+                    `${worker.url}: ${manifest.name} ${manifest.version}`
+                );
+                matched = matchesExtension(manifest, expectedManifest);
+                if (matched) workerSession = session;
+            } catch (error) {
+                workerObservations.add(`${worker.url}: ${error.message}`);
+            }
+            if (matched) break;
+            await send('Target.detachFromTarget', { sessionId: session });
+        }
+        if (!workerSession) await sleep(250);
     }
-    const workerSession = await attach(worker);
+    if (!workerSession)
+        throw new Error(
+            `Could not find ${expectedManifest.name} ${expectedManifest.version} in ${CHROME}. Workers observed: ${[...workerObservations].join(' | ') || 'none'}`
+        );
+
+    // Explicitly create and activate the fixture tab; browser startup may leave
+    // a welcome or blank tab active instead of the command-line URL.
+    const fixture = await send('Target.createTarget', {
+        url: `http://localhost:${PORT}/`
+    });
+    await send('Target.activateTarget', { targetId: fixture.result.targetId });
+    await openPage(`http://localhost:${PORT}/`);
 
     // Everything the popup and the options page do is a write to storage.
-    const settings = patch => evaluate(workerSession,
-        `chrome.storage.local.set(${JSON.stringify(patch)})`);
+    const settings = (patch) =>
+        evaluate(
+            workerSession,
+            `chrome.storage.local.set(${JSON.stringify(patch)})`
+        );
 
     // The extension's own view of which document a tab is holding. A document
     // restored from the back/forward cache keeps the id it had, which is what
     // lets work recorded for it still apply.
-    const topDocumentId = () => evaluate(workerSession, `(async () => {
+    const topDocumentId = () =>
+        evaluate(
+            workerSession,
+            `(async () => {
         const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
         const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
         const top = frames.find(frame => frame.frameId === 0);
         return top ? top.documentId : null;
-    })()`);
+    })()`
+        );
 
     // The extension asks for `<all_urls>` and nothing else that would let it
     // read a tab's URL, because a host permission for the page is already
     // enough - and the `tabs` permission, which the store reads as "sees every
     // page you are on", is not. Everything the extension decides starts from a
     // URL it read this way, so this is checked rather than believed.
-    check('the extension does not ask for the tabs permission',
-        await evaluate(workerSession,
-            'JSON.stringify(chrome.runtime.getManifest().permissions)').then(
-            text => JSON.parse(text).includes('tabs')), false);
-    check('and can still read the URL of a tab it has host access to',
-        await evaluate(workerSession, `(async () => {
+    check(
+        'the extension does not ask for the tabs permission',
+        await evaluate(
+            workerSession,
+            'JSON.stringify(chrome.runtime.getManifest().permissions)'
+        ).then((text) => JSON.parse(text).includes('tabs')),
+        false
+    );
+    check(
+        'and can still read the URL of a tab it has host access to',
+        await evaluate(
+            workerSession,
+            `(async () => {
             const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
             return typeof tab.url === 'string' && tab.url.startsWith('http://localhost');
-        })()`), true);
+        })()`
+        ),
+        true
+    );
 
     let sessionId = await openPage('http://localhost');
-    const bg = expression => evaluate(sessionId, `getComputedStyle(${expression}).backgroundColor`);
+    const bg = (expression) =>
+        evaluate(sessionId, `getComputedStyle(${expression}).backgroundColor`);
     const FRAME_DOC = "document.getElementById('f').contentDocument";
-    const frameBg = id => bg(`${FRAME_DOC}.getElementById(${JSON.stringify(id)})`);
+    const frameBg = (id) =>
+        bg(`${FRAME_DOC}.getElementById(${JSON.stringify(id)})`);
     const frameBodyBg = () => bg(`${FRAME_DOC}.body`);
 
     check('page starts unstyled', await bg('document.body'), WHITE);
 
-    await settings({OverrideAll: true});
+    await settings({ OverrideAll: true });
     await sleep(1500);
-    check('turning the override on styles the open page', await bg('document.body'), DARK);
-    check('and the elements inside it', await bg('document.getElementById("solid")'), DARK);
-    check('and clears what has no background of its own',
-        await bg('document.getElementById("overlay")'), CLEAR);
+    check(
+        'turning the override on styles the open page',
+        await bg('document.body'),
+        DARK
+    );
+    check(
+        'and the elements inside it',
+        await bg('document.getElementById("solid")'),
+        DARK
+    );
+    check(
+        'and clears what has no background of its own',
+        await bg('document.getElementById("overlay")'),
+        CLEAR
+    );
     check('and the sub frame', await frameBodyBg(), DARK);
+
+    await settings({ OverrideGradients: true });
+    await sleep(1500);
+    await evaluate(
+        sessionId,
+        `(() => {
+        const frame = document.createElement('iframe');
+        frame.id = 'lateGradientFrame';
+        frame.src = '/frame?late-gradient';
+        document.body.appendChild(frame);
+    })()`
+    );
+    const lateFrameImage = () =>
+        evaluate(
+            sessionId,
+            `(() => {
+        const element = document.getElementById('lateGradientFrame').contentDocument?.getElementById('frameGradient');
+        return element ? getComputedStyle(element).backgroundImage : 'loading';
+    })()`
+        );
+    check(
+        'gradient override reaches an iframe added after top-page sync',
+        await settles(lateFrameImage, 'none'),
+        'none'
+    );
+    await settings({ OverrideGradients: false });
+    check(
+        'turning gradient override off restores the late iframe',
+        (
+            await settles(
+                lateFrameImage,
+                'linear-gradient(rgb(255, 255, 255), rgb(128, 128, 128))'
+            )
+        ).startsWith('linear-gradient('),
+        true
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("lateGradientFrame").remove()'
+    );
 
     /* ------------------------------------------------- navigating with a frame */
 
@@ -331,7 +473,11 @@ try {
     sessionId = await openPage('second');
     check('a new document is styled', await bg('document.body'), DARK);
     check('its sub frame is styled too', await frameBodyBg(), DARK);
-    check('the sub frame is measured as well', await frameBg('frameOverlay'), CLEAR);
+    check(
+        'the sub frame is measured as well',
+        await frameBg('frameOverlay'),
+        CLEAR
+    );
 
     /* --------------------------------------------------- rapid storage writes */
 
@@ -339,33 +485,48 @@ try {
     // sends a burst like this one. Each write makes the worker swap the tab's
     // stylesheet for a new one, and a swap that overlaps with the next leaves a
     // stylesheet behind that can never be removed again.
-    await evaluate(workerSession, `(async () => {
+    await evaluate(
+        workerSession,
+        `(async () => {
         for (let i = 0; i < 40; i++) {
             chrome.storage.local.set({background_color: (0x101010 + i * 0x010101).toString(16)});
         }
         await chrome.storage.local.set({background_color: '112233'});
-    })()`);
+    })()`
+    );
     await sleep(3000);
-    check('the last color of a burst of writes is the one that applies',
-        await bg('document.body'), 'rgb(17, 34, 51)');
+    check(
+        'the last color of a burst of writes is the one that applies',
+        await bg('document.body'),
+        'rgb(17, 34, 51)'
+    );
 
-    await settings({OverrideAll: false});
+    await settings({ OverrideAll: false });
     await sleep(2000);
-    check('turning the override off leaves no stylesheet behind',
-        await bg('document.body'), WHITE);
+    check(
+        'turning the override off leaves no stylesheet behind',
+        await bg('document.body'),
+        WHITE
+    );
     check('and none in the sub frame either', await frameBodyBg(), WHITE);
 
     /* ------------------------------------------- a document larger than a flush */
 
-    await settings({OverrideAll: true, background_color: '080808'});
+    await settings({ OverrideAll: true, background_color: '080808' });
     await sleep(500);
     await evaluate(sessionId, 'location.href = "/big"');
     await sleep(4000);
     sessionId = await openPage('/big');
-    check('the far end of a 9000 element document is painted',
-        await bg('document.getElementById("big8999")'), DARK);
-    check('the far end of a 9000 element document is measured',
-        await bg('document.getElementById("big8998")'), CLEAR);
+    check(
+        'the far end of a 9000 element document is painted',
+        await bg('document.getElementById("big8999")'),
+        DARK
+    );
+    check(
+        'the far end of a 9000 element document is measured',
+        await bg('document.getElementById("big8998")'),
+        CLEAR
+    );
 
     /* ----------------------------------------------------- a font-only override */
 
@@ -373,19 +534,37 @@ try {
     // still need the agent to carry it across the boundary.
     await evaluate(sessionId, 'location.href = "/?fonts"');
     await sleep(1000);
-    await settings({DefaultBrowserColor: true, DefaultBrowserFont: false, OverrideFontName: 'Georgia'});
+    await settings({
+        DefaultBrowserColor: true,
+        DefaultBrowserFont: false,
+        OverrideFontName: 'Georgia'
+    });
     await sleep(2500);
     sessionId = await openPage('fonts');
-    check('a font-only override keeps the page colors',
-        await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), WHITE);
-    check('a font-only override reaches into a shadow tree', await evaluate(sessionId,
-        'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowText")).fontFamily'),
-        'Georgia, sans-serif');
+    check(
+        'a font-only override keeps the page colors',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.body).backgroundColor'
+        ),
+        WHITE
+    );
+    check(
+        'a font-only override reaches into a shadow tree',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowText")).fontFamily'
+        ),
+        'Georgia, sans-serif'
+    );
 
-    await settings({DefaultBrowserColor: false});
+    await settings({ DefaultBrowserColor: false });
     await sleep(2000);
-    check('the color override comes back on the same page',
-        await evaluate(sessionId, 'getComputedStyle(document.body).color'), TEXT);
+    check(
+        'the color override comes back on the same page',
+        await evaluate(sessionId, 'getComputedStyle(document.body).color'),
+        TEXT
+    );
 
     /* ---------------------------------------- a document replaced right away */
 
@@ -401,14 +580,29 @@ try {
     });
     await sleep(1000);
     await evaluate(sessionId, 'location.href = "/redirect"');
-    await settings({background_color: '445566'});
+    await settings({ background_color: '445566' });
     await sleep(2000);
     sessionId = await openPage('/plain');
-    check('a document that replaced another is left alone if it is excluded',
-        await settles(() => evaluate(sessionId,
-            'getComputedStyle(document.body).backgroundColor'), WHITE), WHITE);
-    check('and its elements too',
-        await evaluate(sessionId, 'getComputedStyle(document.getElementById("p")).backgroundColor'), CLEAR);
+    check(
+        'a document that replaced another is left alone if it is excluded',
+        await settles(
+            () =>
+                evaluate(
+                    sessionId,
+                    'getComputedStyle(document.body).backgroundColor'
+                ),
+            WHITE
+        ),
+        WHITE
+    );
+    check(
+        'and its elements too',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("p")).backgroundColor'
+        ),
+        CLEAR
+    );
 
     /* ------------------------------------------ back into a restored document */
 
@@ -417,7 +611,11 @@ try {
     // is not a new document: what it has to be given is the difference, and
     // what it was left with has to stay removable - a stylesheet forgotten
     // while it is still in a page is one nothing can take out again.
-    await settings({OverrideAll: true, NotOverridenPages: [], background_color: '080808'});
+    await settings({
+        OverrideAll: true,
+        NotOverridenPages: [],
+        background_color: '080808'
+    });
     await sleep(1500);
     await evaluate(sessionId, 'location.href = "/?cached"');
     await sleep(2500);
@@ -430,7 +628,7 @@ try {
     await sleep(2000);
     sessionId = await openPage('/plain');
     // The colors change while the page sits in the cache.
-    await settings({background_color: '223344'});
+    await settings({ background_color: '223344' });
     await sleep(1500);
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
@@ -438,33 +636,52 @@ try {
     // Everything below is about a *restored* document. A browser that reloaded
     // the page instead would pass the colour checks without ever exercising
     // that path, so this is asserted rather than reported.
-    check('the document really came back from the back/forward cache',
-        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
-    check('and came back as the same document',
-        await topDocumentId(), documentBefore);
-    check('a document coming back gets the colors chosen while it was away',
-        await bg('document.body'), 'rgb(34, 51, 68)');
+    check(
+        'the document really came back from the back/forward cache',
+        await evaluate(sessionId, 'window.__cacheMarker === 1'),
+        true
+    );
+    check(
+        'and came back as the same document',
+        await topDocumentId(),
+        documentBefore
+    );
+    check(
+        'a document coming back gets the colors chosen while it was away',
+        await bg('document.body'),
+        'rgb(34, 51, 68)'
+    );
 
-    await settings({OverrideAll: false});
+    await settings({ OverrideAll: false });
     await sleep(2000);
-    check('and the stylesheet it was left with is still removable',
-        await bg('document.body'), WHITE);
+    check(
+        'and the stylesheet it was left with is still removable',
+        await bg('document.body'),
+        WHITE
+    );
 
     /* ------------------ back into a restored document with the override off */
 
     // Turning the override off while a page sits in the cache has to reach that
     // page when it comes back: the stylesheet in it, the one in its sub frame,
     // and the agent it was left running, which is what styles its shadow trees.
-    const shadowColor = () => evaluate(sessionId,
-        'getComputedStyle(document.getElementById("widget").shadowRoot' +
-        '.getElementById("shadowText")).color');
+    const shadowColor = () =>
+        evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("widget").shadowRoot' +
+                '.getElementById("shadowText")).color'
+        );
 
-    await settings({OverrideAll: true, background_color: '080808'});
+    await settings({ OverrideAll: true, background_color: '080808' });
     await sleep(1500);
     await evaluate(sessionId, 'location.href = "/?agent"');
     await sleep(3000);
     sessionId = await openPage('agent');
-    check('the page about to be cached is styled', await bg('document.body'), DARK);
+    check(
+        'the page about to be cached is styled',
+        await bg('document.body'),
+        DARK
+    );
     check('its sub frame is styled', await frameBodyBg(), DARK);
     check('its shadow tree is styled', await shadowColor(), TEXT);
     await evaluate(sessionId, 'window.__cacheMarker = 1');
@@ -472,18 +689,27 @@ try {
     await evaluate(sessionId, 'location.href = "/plain"');
     await sleep(2000);
     sessionId = await openPage('/plain');
-    await settings({OverrideAll: false});
+    await settings({ OverrideAll: false });
     await sleep(1500);
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
     sessionId = await openPage('agent');
-    check('the document with the sub frame came back from the cache',
-        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
-    check('a restored document loses the stylesheet it was left with',
-        await bg('document.body'), WHITE);
+    check(
+        'the document with the sub frame came back from the cache',
+        await evaluate(sessionId, 'window.__cacheMarker === 1'),
+        true
+    );
+    check(
+        'a restored document loses the stylesheet it was left with',
+        await bg('document.body'),
+        WHITE
+    );
     check('its sub frame loses its stylesheet too', await frameBodyBg(), WHITE);
-    check('and its shadow tree goes back to the site colors',
-        await shadowColor(), 'rgb(15, 15, 15)');
+    check(
+        'and its shadow tree goes back to the site colors',
+        await shadowColor(),
+        'rgb(15, 15, 15)'
+    );
 
     /* ------------------------- settings changes on a page that was restored */
 
@@ -492,49 +718,70 @@ try {
     // frame it came back with. A resync has to find it the same way the restore
     // did, or the page goes on with a stylesheet nothing is taking care of any
     // more.
-    await settings({OverrideAll: true, background_color: '080808'});
+    await settings({ OverrideAll: true, background_color: '080808' });
     await sleep(2000);
-    check('the override comes back on a restored page', await bg('document.body'), DARK);
+    check(
+        'the override comes back on a restored page',
+        await bg('document.body'),
+        DARK
+    );
     check('and on the sub frame it came back with', await frameBodyBg(), DARK);
     check('and in its shadow tree', await shadowColor(), TEXT);
 
-    await settings({background_color: '223344'});
+    await settings({ background_color: '223344' });
     await sleep(2000);
-    check('a color change reaches the restored page', await bg('document.body'), 'rgb(34, 51, 68)');
+    check(
+        'a color change reaches the restored page',
+        await bg('document.body'),
+        'rgb(34, 51, 68)'
+    );
     check('and its sub frame', await frameBodyBg(), 'rgb(34, 51, 68)');
 
-    await settings({OverrideAll: false});
+    await settings({ OverrideAll: false });
     await sleep(2000);
-    check('and turning it off leaves nothing behind on either',
-        [await bg('document.body'), await frameBodyBg()], [WHITE, WHITE]);
+    check(
+        'and turning it off leaves nothing behind on either',
+        [await bg('document.body'), await frameBodyBg()],
+        [WHITE, WHITE]
+    );
 
     /* ------------- a page the extension does not touch, and back to a cached one */
 
     // Moving to a page the extension leaves alone must not make it forget the
     // stylesheets it put in the pages behind it. Their text is the only thing
     // that can take them out again.
-    await settings({OverrideAll: true, background_color: '080808'});
+    await settings({ OverrideAll: true, background_color: '080808' });
     await sleep(1500);
     await evaluate(sessionId, 'location.href = "/?ignored"');
     await sleep(3000);
     sessionId = await openPage('ignored');
-    check('the page behind the untouched one is styled', await bg('document.body'), DARK);
+    check(
+        'the page behind the untouched one is styled',
+        await bg('document.body'),
+        DARK
+    );
     await evaluate(sessionId, 'window.__cacheMarker = 1');
 
     await evaluate(sessionId, 'location.href = "about:blank"');
     await sleep(2500);
     sessionId = await openPage('about:blank');
-    await settings({background_color: '445566'});
+    await settings({ background_color: '445566' });
     await sleep(1500);
     await evaluate(sessionId, 'history.back()');
     await sleep(3000);
     sessionId = await openPage('ignored');
-    check('the document behind the untouched page came back from the cache',
-        await evaluate(sessionId, 'window.__cacheMarker === 1'), true);
-    await settings({OverrideAll: false});
+    check(
+        'the document behind the untouched page came back from the cache',
+        await evaluate(sessionId, 'window.__cacheMarker === 1'),
+        true
+    );
+    await settings({ OverrideAll: false });
     await sleep(2000);
-    check('and the stylesheet it was left with survived the detour, and comes out',
-        await bg('document.body'), WHITE);
+    check(
+        'and the stylesheet it was left with survived the detour, and comes out',
+        await bg('document.body'),
+        WHITE
+    );
 
     /* --------------------------------------------------- a prerendered page */
 
@@ -551,7 +798,10 @@ try {
     // What the browser tells the extension about the pages in this tab. The same
     // events the extension itself listens to, so this is evidence a page really
     // was prerendered rather than an assumption that one was.
-    const watchCommits = () => evaluate(workerSession, `(() => {
+    const watchCommits = () =>
+        evaluate(
+            workerSession,
+            `(() => {
         self.__commits = [];
         self.__watch = d => self.__commits.push({
             url: d.url,
@@ -561,12 +811,20 @@ try {
             documentId: d.documentId
         });
         chrome.webNavigation.onCommitted.addListener(self.__watch);
-    })()`);
-    const commits = () => evaluate(workerSession, 'JSON.stringify(self.__commits)');
-    const stopWatching = () => evaluate(workerSession,
-        'chrome.webNavigation.onCommitted.removeListener(self.__watch)');
+    })()`
+        );
+    const commits = () =>
+        evaluate(workerSession, 'JSON.stringify(self.__commits)');
+    const stopWatching = () =>
+        evaluate(
+            workerSession,
+            'chrome.webNavigation.onCommitted.removeListener(self.__watch)'
+        );
 
-    const stateOfTab = () => evaluate(workerSession, `(async () => {
+    const stateOfTab = () =>
+        evaluate(
+            workerSession,
+            `(async () => {
         const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
         const frames = await chrome.webNavigation.getAllFrames({tabId: tab.id});
         const top = frames.find(frame => frame.frameId === 0);
@@ -578,11 +836,16 @@ try {
             showing: record.top,
             decided: Boolean((record.decisions || {})[top && top.documentId])
         });
-    })()`);
-    const goTo = where => evaluate(workerSession, `(async () => {
+    })()`
+        );
+    const goTo = (where) =>
+        evaluate(
+            workerSession,
+            `(async () => {
         const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
         await chrome.tabs.update(tab.id, {url: ${JSON.stringify('')} + ${JSON.stringify(where)}});
-    })()`);
+    })()`
+        );
 
     await settings({
         OverrideAll: true,
@@ -597,36 +860,68 @@ try {
     const seen = JSON.parse(await commits());
     await stopWatching();
     const prerenderCommit = seen.find(function (commit) {
-        return commit.lifecycle === 'prerender' && commit.url.includes('/prerendered');
+        return (
+            commit.lifecycle === 'prerender' &&
+            commit.url.includes('/prerendered')
+        );
     });
 
     if (!prerenderCommit) {
-        console.log('SKIP  this browser did not prerender the page, so what the ' +
-            'extension made of a prerendered page was not checked. Commits seen: ' +
-            JSON.stringify(seen.map(c => c.lifecycle + ' ' + c.frameType + ' ' + c.url.slice(-12))));
+        console.log(
+            'SKIP  this browser did not prerender the page, so what the ' +
+                'extension made of a prerendered page was not checked. Commits seen: ' +
+                JSON.stringify(
+                    seen.map(
+                        (c) =>
+                            c.lifecycle +
+                            ' ' +
+                            c.frameType +
+                            ' ' +
+                            c.url.slice(-12)
+                    )
+                )
+        );
     } else {
-        console.log('      (the prerendered page committed as frameId ' +
-            prerenderCommit.frameId + ', frameType ' + prerenderCommit.frameType + ')');
+        console.log(
+            '      (the prerendered page committed as frameId ' +
+                prerenderCommit.frameId +
+                ', frameType ' +
+                prerenderCommit.frameType +
+                ')'
+        );
         const state = JSON.parse(await stateOfTab());
-        check('a prerendered page is filed as a page of its own',
-            state.pages[prerenderCommit.documentId], prerenderCommit.documentId);
-        check('not as part of the page on screen',
-            state.pages[prerenderCommit.documentId] === state.onScreenDocument, false);
-        check('and the page on screen is still the one the tab is showing',
-            state.showing, state.onScreenDocument);
+        check(
+            'a prerendered page is filed as a page of its own',
+            state.pages[prerenderCommit.documentId],
+            prerenderCommit.documentId
+        );
+        check(
+            'not as part of the page on screen',
+            state.pages[prerenderCommit.documentId] === state.onScreenDocument,
+            false
+        );
+        check(
+            'and the page on screen is still the one the tab is showing',
+            state.showing,
+            state.onScreenDocument
+        );
         check('with the decision taken for it', state.decided, true);
     }
 
     await goTo(`http://localhost:${PORT}/prerendered`);
     await sleep(3000);
     sessionId = await openPage('/prerendered');
-    check('and it is left alone once it is the page on screen',
-        await bg('document.body'), WHITE);
+    check(
+        'and it is left alone once it is the page on screen',
+        await bg('document.body'),
+        WHITE
+    );
     check('sub frame included', await frameBodyBg(), WHITE);
 } catch (e) {
     console.log('FAIL  integration run -> ' + e);
     results.push(false);
 } finally {
+    connection.dispose();
     chrome.kill();
     server.close();
     const passed = results.filter(Boolean).length;

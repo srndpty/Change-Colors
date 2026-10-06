@@ -14,12 +14,12 @@
 // browser is given the staged one, and $REQUIRE_BROWSER says a run that found
 // no browser is a failure rather than a skip - at this point, "the tests did
 // not fail" has to mean "the tests ran".
-import {spawnSync} from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {writeZip} from './zip.mjs';
+import { fileURLToPath } from 'node:url';
+import { writeZip } from './zip.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BUILD = path.join(ROOT, 'build');
@@ -30,7 +30,12 @@ function run(what, file, extraEnv) {
     const result = spawnSync(process.execPath, [file], {
         cwd: ROOT,
         stdio: 'inherit',
-        env: Object.assign({}, process.env, {REQUIRE_BROWSER: '1'}, extraEnv || {})
+        env: Object.assign(
+            {},
+            process.env,
+            { REQUIRE_BROWSER: '1' },
+            extraEnv || {}
+        )
     });
     if (result.status !== 0) {
         console.error(`\nrelease stopped: ${what} failed`);
@@ -49,20 +54,31 @@ function fail(message) {
 // archive is printed at the end so that what was uploaded can be tied to what
 // is in the repository, and a tree with uncommitted changes in it cannot be
 // tied to anything. $ALLOW_DIRTY is for trying the gate out without releasing.
-const dirty = (spawnSync('git', ['status', '--porcelain'], {
-    cwd: ROOT, encoding: 'utf8'
-}).stdout || '').trim();
+const dirty = (
+    spawnSync('git', ['status', '--porcelain'], {
+        cwd: ROOT,
+        encoding: 'utf8'
+    }).stdout || ''
+).trim();
 if (dirty && !process.env.ALLOW_DIRTY) {
     console.error('release stopped: the working tree has uncommitted changes:');
     console.error(dirty);
-    console.error('Commit them, or set $ALLOW_DIRTY to build one that is not going');
+    console.error(
+        'Commit them, or set $ALLOW_DIRTY to build one that is not going'
+    );
     console.error('to be uploaded.');
     process.exit(1);
 }
 
-const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
-console.log(`=== version\npackage.json ${pkg.version}, manifest.json ${manifest.version}`);
+const pkg = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')
+);
+const manifest = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8')
+);
+console.log(
+    `=== version\npackage.json ${pkg.version}, manifest.json ${manifest.version}`
+);
 if (pkg.version !== manifest.version) {
     fail('package.json and manifest.json disagree about the version');
 }
@@ -72,9 +88,13 @@ if (!/^\d+\.\d+(\.\d+)?(\.\d+)?$/.test(manifest.version)) {
 
 /* --------------------------------------------------------------- the tests */
 
-run('what a tab knows', 'test/record.test.mjs');
-run('the override rules', 'test/settings.test.mjs');
-run('the 2.x migration', 'test/migration.test.mjs');
+console.log('\n=== lint, formatting, types and unit tests');
+const quality = spawnSync('npm run check', {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: true
+});
+if (quality.status !== 0) fail('npm run check failed');
 run('the stylesheet in a real layout', 'test/css.test.mjs');
 run('the extension, loaded from the source', 'test/integration.test.mjs');
 run('what the styling costs a busy page', 'test/perf.test.mjs');
@@ -82,37 +102,45 @@ run('what the styling costs a busy page', 'test/perf.test.mjs');
 /* ------------------------------------------------------------- the package */
 
 run('staging what ships', 'tools/stage.mjs');
-run('the extension, loaded from build/', 'test/integration.test.mjs',
-    {EXTENSION_DIR: BUILD});
+run('the extension, loaded from build/', 'test/integration.test.mjs', {
+    EXTENSION_DIR: BUILD
+});
 
 const files = [];
 (function walk(directory, prefix) {
-    for (const entry of fs.readdirSync(directory, {withFileTypes: true}).sort(function (a, b) {
-        return a.name < b.name ? -1 : 1;
-    })) {
+    for (const entry of fs
+        .readdirSync(directory, { withFileTypes: true })
+        .sort(function (a, b) {
+            return a.name < b.name ? -1 : 1;
+        })) {
         const full = path.join(directory, entry.name);
         const name = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
             walk(full, name);
         } else {
-            files.push({name: name, path: full});
+            files.push({ name: name, path: full });
         }
     }
 })(BUILD, '');
 
-if (!files.some(function (file) {
-    return file.name === 'manifest.json';
-})) {
+if (
+    !files.some(function (file) {
+        return file.name === 'manifest.json';
+    })
+) {
     fail('build/ has no manifest.json at its root');
 }
 
-fs.mkdirSync(DIST, {recursive: true});
+fs.mkdirSync(DIST, { recursive: true });
 const zip = path.join(DIST, `change-colors-${manifest.version}.zip`);
 writeZip(zip, files);
 
 const bytes = fs.readFileSync(zip);
 const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-const commit = spawnSync('git', ['rev-parse', 'HEAD'], {cwd: ROOT, encoding: 'utf8'});
+const commit = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: ROOT,
+    encoding: 'utf8'
+});
 
 console.log(`\n=== the package
 ${path.relative(ROOT, zip)}

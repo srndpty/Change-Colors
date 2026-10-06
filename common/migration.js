@@ -45,13 +45,16 @@ function waitForReport(timeoutMs) {
             resolve(value);
         };
     });
-    return {promise: promise, cancel: function () {
-        stop(null);
-    }};
+    return {
+        promise: promise,
+        cancel: function () {
+            stop(null);
+        }
+    };
 }
 
 async function run(timeoutMs) {
-    const flag = await chrome.storage.local.get({legacyMigrationDone: false});
+    const flag = await chrome.storage.local.get({ legacyMigrationDone: false });
     if (flag.legacyMigrationDone) {
         return;
     }
@@ -63,7 +66,8 @@ async function run(timeoutMs) {
         await chrome.offscreen.createDocument({
             url: 'offscreen.html',
             reasons: ['LOCAL_STORAGE'],
-            justification: 'Read settings saved by the previous Manifest V2 version.'
+            justification:
+                'Read settings saved by the previous Manifest V2 version.'
         });
         legacy = await reported.promise;
     } catch (e) {
@@ -88,7 +92,7 @@ async function run(timeoutMs) {
     // they have replaced would lose settings just as surely as the failure this
     // retry exists for.
     const current = await chrome.storage.local.get(null);
-    const patch = {legacyMigrationDone: true};
+    const patch = { legacyMigrationDone: true };
     for (const [key, value] of Object.entries(legacy)) {
         if (!(key in current)) {
             patch[key] = value;
@@ -103,10 +107,11 @@ let migrating = null;
 
 export function migrateLegacySettings(timeoutMs) {
     if (!migrating) {
-        migrating = run(timeoutMs === undefined ? REPORT_TIMEOUT : timeoutMs)
-            .finally(function () {
-                migrating = null;
-            });
+        migrating = run(
+            timeoutMs === undefined ? REPORT_TIMEOUT : timeoutMs
+        ).finally(function () {
+            migrating = null;
+        });
     }
     return migrating;
 }

@@ -1,0 +1,51 @@
+name: Quality
+
+on:
+    push:
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    static:
+        timeout-minutes: 10
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - run: npm ci
+              env:
+                  HUSKY: '0'
+            - run: npm run check
+            - run: npm run stage
+    browser:
+        timeout-minutes: 20
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - run: npm ci
+              env:
+                  HUSKY: '0'
+            - run: npx playwright install --with-deps chromium
+            - name: Browser tests against source and staged extension
+              timeout-minutes: 12
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  export CHROME_UNBRANDED="$(node --input-type=module -e 'import {chromium} from "playwright"; console.log(chromium.executablePath())')"
+                  test -x "$CHROME_UNBRANDED"
+                  echo "Chromium: $CHROME_UNBRANDED"
+                  "$CHROME_UNBRANDED" --version
+                  export CHROME="$CHROME_UNBRANDED"
+                  export REQUIRE_BROWSER=1
+                  npm run test:browser
+                  npm run stage
+                  EXTENSION_DIR="$PWD/build" npm run test:integration

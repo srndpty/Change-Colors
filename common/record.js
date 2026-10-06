@@ -56,7 +56,12 @@
  */
 
 /** What a page gets when nothing is meant to be applied to it. */
-export const NOTHING = {css: null, shadowCss: null, probe: false};
+export const NOTHING = {
+    css: null,
+    shadowCss: null,
+    probe: false,
+    gradients: false
+};
 
 export function readRecord(value) {
     return {
@@ -70,9 +75,11 @@ export function readRecord(value) {
 }
 
 export function isEmpty(record) {
-    return !Object.keys(record.decisions).length &&
+    return (
+        !Object.keys(record.decisions).length &&
         !Object.keys(record.pages).length &&
-        !Object.keys(record.documents).length;
+        !Object.keys(record.documents).length
+    );
 }
 
 function textAt(record, index) {
@@ -100,7 +107,8 @@ export function decisionFor(record, pageId) {
     return {
         css: textAt(record, stored.css),
         shadowCss: textAt(record, stored.shadow),
-        probe: Boolean(stored.probe)
+        probe: Boolean(stored.probe),
+        gradients: Boolean(stored.gradients)
     };
 }
 
@@ -112,7 +120,8 @@ export function setDecision(record, pageId, decision) {
     record.decisions[pageId] = {
         css: indexOfSheet(record, decision.css),
         shadow: indexOfSheet(record, decision.shadowCss),
-        probe: Boolean(decision.probe)
+        probe: Boolean(decision.probe),
+        gradients: Boolean(decision.gradients)
     };
 }
 

@@ -1,11 +1,19 @@
 {
     "name": "change-colors",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "private": true,
     "description": "Customize web page colors, fonts, images, and link styles for more comfortable reading.",
     "type": "module",
     "scripts": {
-        "test": "node test/record.test.mjs && node test/settings.test.mjs && node test/migration.test.mjs && node test/css.test.mjs && node test/integration.test.mjs",
+        "prepare": "husky",
+        "lint": "eslint . --max-warnings 0",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "typecheck": "tsc --noEmit",
+        "test:unit": "node test/browser.test.mjs && node test/record.test.mjs && node test/settings.test.mjs && node test/migration.test.mjs",
+        "test:browser": "node test/css.test.mjs && node test/integration.test.mjs",
+        "check": "npm run lint && npm run format:check && npm run typecheck && npm run test:unit",
+        "test": "npm run test:unit && npm run test:browser",
         "test:integration": "node test/integration.test.mjs",
         "test:perf": "node test/perf.test.mjs",
         "test:migration": "node test/migration.test.mjs",
@@ -14,5 +22,27 @@
         "test:settings": "node test/settings.test.mjs",
         "stage": "node tools/stage.mjs",
         "release": "node tools/release.mjs"
+    },
+    "engines": {
+        "node": ">=22.13.0"
+    },
+    "lint-staged": {
+        "*.{js,mjs}": [
+            "eslint --max-warnings 0 --no-warn-ignored",
+            "prettier --check"
+        ],
+        "*.{json,html,css,md,yml,yaml}": "prettier --check"
+    },
+    "devDependencies": {
+        "@eslint/js": "10.0.1",
+        "@types/chrome": "0.3.4",
+        "@types/node": "26.6.4",
+        "eslint": "10.12.0",
+        "globals": "17.13.0",
+        "husky": "9.1.7",
+        "lint-staged": "16.4.0",
+        "playwright": "1.61.0",
+        "prettier": "3.9.9",
+        "typescript": "7.0.2"
     }
 }

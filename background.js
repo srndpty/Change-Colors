@@ -35,8 +35,13 @@ import {
     setOverride,
     toggleOverride
 } from './common/settings.js';
-import {buildCss, buildShadowCss, needsPageAgent, needsBackgroundProbe} from './common/css.js';
-import {migrateLegacySettings} from './common/migration.js';
+import {
+    buildCss,
+    buildShadowCss,
+    needsPageAgent,
+    needsBackgroundProbe
+} from './common/css.js';
+import { migrateLegacySettings } from './common/migration.js';
 import {
     NOTHING,
     compact,
@@ -44,7 +49,7 @@ import {
     pageOf,
     readRecord
 } from './common/record.js';
-import {syncCommittedFrame, syncPage} from './common/sync.js';
+import { syncCommittedFrame, syncPage } from './common/sync.js';
 
 const ICON_ON = 'icons/colors_icons.png';
 const ICON_OFF = 'icons/colors_icons_grey.png';
@@ -155,7 +160,7 @@ async function saveRecord(tabId, record) {
         if (isEmpty(record)) {
             await chrome.storage.session.remove(injectedKey(tabId));
         } else {
-            await chrome.storage.session.set({[injectedKey(tabId)]: record});
+            await chrome.storage.session.set({ [injectedKey(tabId)]: record });
         }
     } catch (e) {
         return false;
@@ -200,10 +205,15 @@ function ioFor(tabId) {
  */
 async function liveFrames(tabId) {
     try {
-        const frames = await chrome.webNavigation.getAllFrames({tabId: tabId});
+        const frames = await chrome.webNavigation.getAllFrames({
+            tabId: tabId
+        });
         return (frames || []).filter(function (frame) {
-            return Boolean(frame.documentId) &&
-                (frame.documentLifecycle === undefined || frame.documentLifecycle === 'active');
+            return (
+                Boolean(frame.documentId) &&
+                (frame.documentLifecycle === undefined ||
+                    frame.documentLifecycle === 'active')
+            );
         });
     } catch (e) {
         return [];
@@ -237,7 +247,8 @@ function isOutermost(frame) {
 function documentsUnder(frames, top) {
     const children = new Map();
     for (const frame of frames) {
-        const parent = frame.parentDocumentId ||
+        const parent =
+            frame.parentDocumentId ||
             (frame.parentFrameId >= 0 ? 'frame:' + frame.parentFrameId : null);
         if (parent === null) {
             continue;
@@ -248,8 +259,9 @@ function documentsUnder(frames, top) {
     const queue = [top];
     while (queue.length) {
         const frame = queue.shift();
-        const below = (children.get(frame.documentId) || [])
-            .concat(children.get('frame:' + frame.frameId) || []);
+        const below = (children.get(frame.documentId) || []).concat(
+            children.get('frame:' + frame.frameId) || []
+        );
         for (const child of below) {
             if (!found.includes(child.documentId)) {
                 found.push(child.documentId);
@@ -264,7 +276,7 @@ function documentsUnder(frames, top) {
 async function insertCss(tabId, documentId, css) {
     try {
         await chrome.scripting.insertCSS({
-            target: {tabId: tabId, documentIds: [documentId]},
+            target: { tabId: tabId, documentIds: [documentId] },
             css: css
         });
         return true;
@@ -278,7 +290,7 @@ async function insertCss(tabId, documentId, css) {
 async function removeCss(tabId, documentId, css) {
     try {
         await chrome.scripting.removeCSS({
-            target: {tabId: tabId, documentIds: [documentId]},
+            target: { tabId: tabId, documentIds: [documentId] },
             css: css
         });
         return true;
@@ -297,8 +309,8 @@ async function removeCss(tabId, documentId, css) {
  * layers a page stacks over its content - a headline over a hero banner, the
  * controls over a video - would stay opaque until the page went idle.
  */
-async function startAgent(tabId, documentId, shadowCss, probe) {
-    const target = {tabId: tabId, documentIds: [documentId]};
+async function startAgent(tabId, documentId, shadowCss, probe, gradients) {
+    const target = { tabId: tabId, documentIds: [documentId] };
     try {
         await chrome.scripting.executeScript({
             target: target,
@@ -307,11 +319,11 @@ async function startAgent(tabId, documentId, shadowCss, probe) {
         });
         await chrome.scripting.executeScript({
             target: target,
-            args: [shadowCss, probe],
+            args: [shadowCss, probe, gradients],
             injectImmediately: true,
-            func: function (css, measure) {
+            func: function (css, measure, gradients) {
                 if (window.__changeColorsAgent) {
-                    window.__changeColorsAgent.setCss(css, measure);
+                    window.__changeColorsAgent.setCss(css, measure, gradients);
                 }
             }
         });
@@ -328,7 +340,13 @@ async function startAgent(tabId, documentId, shadowCss, probe) {
  */
 async function applyAgent(tabId, documentId, decision) {
     if (decision.shadowCss !== null) {
-        await startAgent(tabId, documentId, decision.shadowCss, decision.probe);
+        await startAgent(
+            tabId,
+            documentId,
+            decision.shadowCss,
+            decision.probe,
+            decision.gradients
+        );
     } else {
         await stopAgent(tabId, documentId);
     }
@@ -337,7 +355,7 @@ async function applyAgent(tabId, documentId, decision) {
 async function stopAgent(tabId, documentId) {
     try {
         await chrome.scripting.executeScript({
-            target: {tabId: tabId, documentIds: [documentId]},
+            target: { tabId: tabId, documentIds: [documentId] },
             injectImmediately: true,
             func: function () {
                 if (window.__changeColorsAgent) {
@@ -352,7 +370,10 @@ async function stopAgent(tabId, documentId) {
 
 async function setIcon(tabId, active) {
     try {
-        await chrome.action.setIcon({tabId: tabId, path: active ? ICON_ON : ICON_OFF});
+        await chrome.action.setIcon({
+            tabId: tabId,
+            path: active ? ICON_ON : ICON_OFF
+        });
         await chrome.action.setTitle({
             tabId: tabId,
             title: active ? 'Change Colors (override active)' : 'Change Colors'
@@ -367,12 +388,13 @@ async function wantedFor(url) {
     const settings = await getSettings();
     const state = getOverrideState(settings, url);
     if (!state.active) {
-        return {css: null, shadowCss: null, probe: false};
+        return { css: null, shadowCss: null, probe: false };
     }
     return {
         css: buildCss(settings),
         shadowCss: needsPageAgent(settings) ? buildShadowCss(settings) : null,
-        probe: needsBackgroundProbe(settings)
+        probe: needsBackgroundProbe(settings),
+        gradients: !settings.DefaultBrowserColor && settings.OverrideGradients
     };
 }
 
@@ -424,15 +446,22 @@ async function syncTab(tabId, url, fresh) {
     record.top = pageId;
     const decision = await wantedFor(currentUrl);
     await setIcon(tabId, Boolean(decision.css));
-    await syncPage(ioFor(tabId), pageId, decision, record,
-        top ? documentsUnder(frames, top) : []);
+    await syncPage(
+        ioFor(tabId),
+        pageId,
+        decision,
+        record,
+        top ? documentsUnder(frames, top) : []
+    );
 }
 
 async function syncAllTabs() {
     const tabs = await chrome.tabs.query({});
-    await Promise.all(tabs.map(function (tab) {
-        return queueSync(tab.id, tab.url);
-    }));
+    await Promise.all(
+        tabs.map(function (tab) {
+            return queueSync(tab.id, tab.url);
+        })
+    );
 }
 
 async function syncActiveTab(tabId) {
@@ -455,7 +484,8 @@ async function syncActiveTab(tabId) {
  * rather than assumed empty.
  */
 chrome.webNavigation.onCommitted.addListener(function (details) {
-    const active = details.documentLifecycle === undefined ||
+    const active =
+        details.documentLifecycle === undefined ||
         details.documentLifecycle === 'active';
     if (isOutermost(details)) {
         if (active) {
@@ -478,11 +508,20 @@ chrome.webNavigation.onCommitted.addListener(function (details) {
         // nothing: a sub frame restored from the back/forward cache still holds
         // the stylesheet and the agent it was left with, and both have to go.
         const record = await getRecord(details.tabId);
-        const pageId = pageOf(record, details.documentId, details.parentDocumentId);
+        const pageId = pageOf(
+            record,
+            details.documentId,
+            details.parentDocumentId
+        );
         if (!pageId) {
             return;
         }
-        await syncCommittedFrame(ioFor(details.tabId), details.documentId, pageId, record);
+        await syncCommittedFrame(
+            ioFor(details.tabId),
+            details.documentId,
+            pageId,
+            record
+        );
     });
 });
 
@@ -535,7 +574,10 @@ const COMMAND_SCOPES = {
 // is the same bug twice.
 chrome.commands.onCommand.addListener(async function (command) {
     const scope = COMMAND_SCOPES[command];
-    const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+    const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true
+    });
     if (!scope || !tab || !isSupportedUrl(tab.url)) {
         return;
     }
@@ -558,16 +600,22 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (!message || message.action !== 'setOverride') {
         return false;
     }
-    if (!isScope(message.scope) || !isSupportedUrl(message.url) ||
-            typeof message.active !== 'boolean') {
-        sendResponse({ok: false});
+    if (
+        !isScope(message.scope) ||
+        !isSupportedUrl(message.url) ||
+        typeof message.active !== 'boolean'
+    ) {
+        sendResponse({ ok: false });
         return false;
     }
-    setOverride(message.scope, message.url, message.active).then(function () {
-        sendResponse({ok: true});
-    }, function () {
-        sendResponse({ok: false});
-    });
+    setOverride(message.scope, message.url, message.active).then(
+        function () {
+            sendResponse({ ok: true });
+        },
+        function () {
+            sendResponse({ ok: false });
+        }
+    );
     return true;
 });
 

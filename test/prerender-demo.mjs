@@ -37,16 +37,21 @@ const FRAME = `<!doctype html><html><body style="background:#ffffff;color:#111">
 </body></html>`;
 
 const server = http.createServer((req, res) => {
-    res.writeHead(200, {'Content-Type': 'text/html'});
+    res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(
-        req.url.startsWith('/prerendered') ? PRERENDERED :
-        req.url.startsWith('/frame') ? FRAME : SPECULATE
+        req.url.startsWith('/prerendered')
+            ? PRERENDERED
+            : req.url.startsWith('/frame')
+              ? FRAME
+              : SPECULATE
     );
 });
-server.on('error', error => {
+server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
-        console.log(`Port ${PORT} is already taken - another copy of this is ` +
-            `probably still running. Use it, or set PORT to something else.`);
+        console.log(
+            `Port ${PORT} is already taken - another copy of this is ` +
+                `probably still running. Use it, or set PORT to something else.`
+        );
         process.exit(1);
     }
     throw error;

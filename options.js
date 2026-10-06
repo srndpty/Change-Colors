@@ -2,9 +2,9 @@
  * Options page. Reads and writes chrome.storage.local directly; the service
  * worker watches storage and re-applies the styling to open tabs.
  */
-import {getSettings, saveSettings} from './common/settings.js';
-import {cssFontFamily} from './common/css.js';
-import {FONTS, createFontDetector} from './libs/font_detect.js';
+import { getSettings, saveSettings } from './common/settings.js';
+import { cssFontFamily } from './common/css.js';
+import { FONTS, createFontDetector } from './libs/font_detect.js';
 
 let settings = null;
 let detectFont = null;
@@ -33,7 +33,13 @@ function setRowsVisible(ids, visible) {
     });
 }
 
-const COLOR_ROWS = ['background_color_row', 'text_color_row', 'links_color_row', 'visited_links_color_row'];
+const COLOR_ROWS = [
+    'background_color_row',
+    'text_color_row',
+    'links_color_row',
+    'visited_links_color_row',
+    'override_gradients_row'
+];
 const FONT_ROWS = ['fontSelection', 'fontSizeRow'];
 
 function applySampleColors() {
@@ -47,8 +53,14 @@ function applySampleColors() {
 function applySampleFont() {
     const sample = $('sampleBlock');
     const size = parseInt(settings.FontSize, 10) || 0;
-    sample.style.fontFamily = settings.DefaultBrowserFont ? '' : cssFontFamily(settings.OverrideFontName);
-    sample.style.fontSize = settings.DefaultBrowserFont ? '' : (size === 0 ? '12pt' : size + 'pt');
+    sample.style.fontFamily = settings.DefaultBrowserFont
+        ? ''
+        : cssFontFamily(settings.OverrideFontName);
+    sample.style.fontSize = settings.DefaultBrowserFont
+        ? ''
+        : size === 0
+          ? '12pt'
+          : size + 'pt';
 }
 
 function displayColoredMessage(element, message, colorCode) {
@@ -59,22 +71,31 @@ function displayColoredMessage(element, message, colorCode) {
 /* ---------------------------------------------------------------- colors */
 
 function initColors() {
-    ['background_color', 'text_color', 'links_color', 'visited_links_color'].forEach(function (id) {
+    $('overrideGradients').checked = Boolean(settings.OverrideGradients);
+    $('overrideGradients').addEventListener('change', function () {
+        save({ OverrideGradients: $('overrideGradients').checked });
+    });
+    [
+        'background_color',
+        'text_color',
+        'links_color',
+        'visited_links_color'
+    ].forEach(function (id) {
         const input = $(id);
         input.value = toInputColor(settings[id]);
         input.addEventListener('input', async function () {
-            await save({[id]: toStoredColor(input.value)});
+            await save({ [id]: toStoredColor(input.value) });
             applySampleColors();
         });
     });
 
     $('browserColorDefault').addEventListener('change', async function () {
         setRowsVisible(COLOR_ROWS, false);
-        await save({DefaultBrowserColor: true});
+        await save({ DefaultBrowserColor: true });
     });
     $('browserColorOverride').addEventListener('change', async function () {
         setRowsVisible(COLOR_ROWS, true);
-        await save({DefaultBrowserColor: false});
+        await save({ DefaultBrowserColor: false });
     });
 
     $('browserColorDefault').checked = Boolean(settings.DefaultBrowserColor);
@@ -160,12 +181,12 @@ function buildFontSizeSelector() {
 async function setFont(name) {
     $('default_font').textContent = name;
     $('default_font').style.fontFamily = cssFontFamily(name);
-    await save({OverrideFontName: name});
+    await save({ OverrideFontName: name });
     applySampleFont();
 }
 
 async function setFontSize(size) {
-    await save({FontSize: String(size)});
+    await save({ FontSize: String(size) });
     applySampleFont();
 }
 
@@ -179,7 +200,7 @@ async function addCustomFont() {
         return;
     }
     if (settings.CustomFonts.indexOf(name) === -1) {
-        await save({CustomFonts: settings.CustomFonts.concat([name])});
+        await save({ CustomFonts: settings.CustomFonts.concat([name]) });
         buildFontSelector();
     }
     input.value = '';
@@ -189,7 +210,7 @@ async function addCustomFont() {
 async function removeCustomFont(index) {
     const fonts = settings.CustomFonts.slice();
     fonts.splice(index, 1);
-    await save({CustomFonts: fonts});
+    await save({ CustomFonts: fonts });
     buildFontSelector();
 }
 
@@ -199,14 +220,21 @@ function toggleFontSelector() {
     const show = selector.hidden;
     selector.hidden = !show;
     setter.hidden = !show;
-    $('fontSelectorBtn').textContent = show ? '(Hide font selection)' : '(Use another font)';
+    $('fontSelectorBtn').textContent = show
+        ? '(Hide font selection)'
+        : '(Use another font)';
 }
 
 function initFonts() {
     detectFont = createFontDetector();
 
-    $('default_font').textContent = String(settings.OverrideFontName).replace(/^['"]|['"]$/g, '');
-    $('default_font').style.fontFamily = cssFontFamily(settings.OverrideFontName);
+    $('default_font').textContent = String(settings.OverrideFontName).replace(
+        /^['"]|['"]$/g,
+        ''
+    );
+    $('default_font').style.fontFamily = cssFontFamily(
+        settings.OverrideFontName
+    );
     buildFontSelector();
     buildFontSizeSelector();
 
@@ -220,12 +248,12 @@ function initFonts() {
 
     $('browserFontDefault').addEventListener('change', async function () {
         setRowsVisible(FONT_ROWS, false);
-        await save({DefaultBrowserFont: true});
+        await save({ DefaultBrowserFont: true });
         applySampleFont();
     });
     $('browserFontOverride').addEventListener('change', async function () {
         setRowsVisible(FONT_ROWS, true);
-        await save({DefaultBrowserFont: false});
+        await save({ DefaultBrowserFont: false });
         applySampleFont();
     });
 
@@ -241,10 +269,10 @@ function initSwitch(defaultId, overrideId, key) {
     $(defaultId).checked = Boolean(settings[key]);
     $(overrideId).checked = !settings[key];
     $(defaultId).addEventListener('change', function () {
-        save({[key]: true});
+        save({ [key]: true });
     });
     $(overrideId).addEventListener('change', function () {
-        save({[key]: false});
+        save({ [key]: false });
     });
 }
 
@@ -256,7 +284,7 @@ async function init() {
     initSwitch('showFlashDefault', 'showFlashOverride', 'ShowFlash');
 
     $('editShortcuts').addEventListener('click', function () {
-        chrome.tabs.create({url: 'chrome://extensions/shortcuts'});
+        chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
     });
 }
 
