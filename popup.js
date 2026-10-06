@@ -56,24 +56,44 @@ function setBusy(busy) {
 
 async function render() {
     const state = getOverrideState(await getSettings(), currentTab.url);
-    setButton('pageOverriden',
-        state.active ? 'Remove override on this page' : 'Apply override on this page',
-        'page', !state.active);
-    setButton('domainOverriden',
-        state.domainActive ? 'Remove override on this domain' : 'Apply override on this domain',
-        'domain', !state.domainActive);
-    setButton('overrideAll',
-        state.OverrideAll ? 'Remove override on all pages' : 'Apply override on all pages',
-        'all', !state.OverrideAll);
+    setButton(
+        'pageOverriden',
+        state.active
+            ? 'Remove override on this page'
+            : 'Apply override on this page',
+        'page',
+        !state.active
+    );
+    setButton(
+        'domainOverriden',
+        state.domainActive
+            ? 'Remove override on this domain'
+            : 'Apply override on this domain',
+        'domain',
+        !state.domainActive
+    );
+    setButton(
+        'overrideAll',
+        state.OverrideAll
+            ? 'Remove override on all pages'
+            : 'Apply override on all pages',
+        'all',
+        !state.OverrideAll
+    );
 }
 
 async function init() {
-    document.getElementById('openOptions').addEventListener('click', function (event) {
-        event.preventDefault();
-        chrome.runtime.openOptionsPage();
-    });
+    document
+        .getElementById('openOptions')
+        .addEventListener('click', function (event) {
+            event.preventDefault();
+            chrome.runtime.openOptionsPage();
+        });
 
-    const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+    const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true
+    });
     currentTab = tab;
     if (!tab || !isSupportedUrl(tab.url)) {
         document.getElementById('buttons').hidden = true;

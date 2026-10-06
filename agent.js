@@ -30,12 +30,23 @@
     // Split only top-level commas: URLs and gradient arguments may contain commas.
     function withoutGradients(image) {
         const layers = [];
-        let start = 0, depth = 0, quote = '';
+        let start = 0,
+            depth = 0,
+            quote = '';
         for (let i = 0; i < image.length; i++) {
             const char = image[i];
-            if (char === '\\') { i++; continue; }
-            if (quote) { if (char === quote) quote = ''; continue; }
-            if (char === '"' || char === "'") { quote = char; continue; }
+            if (char === '\\') {
+                i++;
+                continue;
+            }
+            if (quote) {
+                if (char === quote) quote = '';
+                continue;
+            }
+            if (char === '"' || char === "'") {
+                quote = char;
+                continue;
+            }
             if (char === '(') depth++;
             if (char === ')') depth--;
             if (char === ',' && depth === 0) {
@@ -46,7 +57,11 @@
         layers.push(image.slice(start).trim());
         let changed = false;
         const filtered = layers.map(function (layer) {
-            if (/^(?:-webkit-)?(?:repeating-)?(?:linear|radial|conic)-gradient\(/i.test(layer)) {
+            if (
+                /^(?:-webkit-)?(?:repeating-)?(?:linear|radial|conic)-gradient\(/i.test(
+                    layer
+                )
+            ) {
                 changed = true;
                 return 'none';
             }
@@ -119,7 +134,9 @@
         try {
             if (sheet) {
                 if (root.adoptedStyleSheets.indexOf(sheet) === -1) {
-                    root.adoptedStyleSheets = root.adoptedStyleSheets.concat([sheet]);
+                    root.adoptedStyleSheets = root.adoptedStyleSheets.concat([
+                        sheet
+                    ]);
                 }
                 styledRoots.add(root);
                 return;
@@ -173,7 +190,7 @@
         if (!host || !host.isConnected || host.ownerDocument !== document) {
             return false;
         }
-        return host.getRootNode({composed: true}) === document;
+        return host.getRootNode({ composed: true }) === document;
     }
 
     /**
@@ -188,13 +205,17 @@
     /** Takes everything this agent put into a shadow tree back out of it. */
     function unstyle(root) {
         try {
-            root.adoptedStyleSheets = root.adoptedStyleSheets.filter(function (adopted) {
-                return adopted !== sheet;
-            });
+            root.adoptedStyleSheets = root.adoptedStyleSheets.filter(
+                function (adopted) {
+                    return adopted !== sheet;
+                }
+            );
         } catch (e) {
             // Root is gone.
         }
-        const style = root.querySelector && root.querySelector('style[data-changecolors]');
+        const style =
+            root.querySelector &&
+            root.querySelector('style[data-changecolors]');
         if (style) {
             style.remove();
         }
@@ -270,8 +291,13 @@
         measuring = measure !== false;
         overrideGradients = measuring && gradients === true;
         if (!overrideGradients) {
-            document.querySelectorAll('[' + GRADIENT + ']').forEach(clearGradient);
-            for (const root of styledRoots) root.querySelectorAll('[' + GRADIENT + ']').forEach(clearGradient);
+            document
+                .querySelectorAll('[' + GRADIENT + ']')
+                .forEach(clearGradient);
+            for (const root of styledRoots)
+                root.querySelectorAll('[' + GRADIENT + ']').forEach(
+                    clearGradient
+                );
         }
         if (!sheet) {
             try {
@@ -357,7 +383,12 @@
         }
         const backgrounds = elements.map(function (element) {
             const style = window.getComputedStyle(element);
-            return {clear: isSeeThrough(style.backgroundColor), image: overrideGradients ? withoutGradients(style.backgroundImage) : null};
+            return {
+                clear: isSeeThrough(style.backgroundColor),
+                image: overrideGradients
+                    ? withoutGradients(style.backgroundImage)
+                    : null
+            };
         });
         for (let i = 0; i < elements.length; i++) {
             const element = elements[i];
@@ -370,7 +401,11 @@
                 element.style.removeProperty(BACKGROUND_IMAGE);
                 element.removeAttribute(GRADIENT);
             }
-            if (element === document.documentElement || element === document.body) continue;
+            if (
+                element === document.documentElement ||
+                element === document.body
+            )
+                continue;
             if (background.clear && background.image === null) {
                 if (!element.hasAttribute(CLEAR)) {
                     element.setAttribute(CLEAR, '');
@@ -463,7 +498,10 @@
     function finishWalk(walk) {
         walks.shift();
         if (walk.again && walk.root.isConnected !== false) {
-            walk.walker = document.createTreeWalker(walk.root, NodeFilter.SHOW_ELEMENT);
+            walk.walker = document.createTreeWalker(
+                walk.root,
+                NodeFilter.SHOW_ELEMENT
+            );
             walk.started = false;
             walk.again = false;
             walks.push(walk);
@@ -521,7 +559,10 @@
                 want(element, batch, seen);
             }
         }
-        stats.maxElementsTaken = Math.max(stats.maxElementsTaken, elementsTaken);
+        stats.maxElementsTaken = Math.max(
+            stats.maxElementsTaken,
+            elementsTaken
+        );
         stats.maxElementsSeen = Math.max(stats.maxElementsSeen, elementsSeen);
 
         // Taking a root on costs a tree walker and a place in the queue, so this
@@ -534,7 +575,11 @@
         let rootsSeen = 0;
         for (const root of pendingRoots) {
             rootsSeen++;
-            if (intake <= 0 || budget <= 0 || walks.length >= MAX_QUEUED_WALKS) {
+            if (
+                intake <= 0 ||
+                budget <= 0 ||
+                walks.length >= MAX_QUEUED_WALKS
+            ) {
                 break;
             }
             pendingRoots.delete(root);
@@ -545,7 +590,10 @@
                 queueWalk(root);
             }
         }
-        stats.maxRootsFromPending = Math.max(stats.maxRootsFromPending, rootsTaken);
+        stats.maxRootsFromPending = Math.max(
+            stats.maxRootsFromPending,
+            rootsTaken
+        );
         stats.maxRootsSeen = Math.max(stats.maxRootsSeen, rootsSeen);
 
         while (walks.length && budget > 0) {
@@ -556,7 +604,7 @@
                     handle(walk.root);
                 }
             }
-            let node = null;
+            let node;
             while (budget > 0 && (node = walk.walker.nextNode())) {
                 handle(node);
             }
@@ -570,7 +618,12 @@
             pruneDetachedRoots();
         }
 
-        if (walks.length || pendingElements.size || pendingRoots.size || sweeping) {
+        if (
+            walks.length ||
+            pendingElements.size ||
+            pendingRoots.size ||
+            sweeping
+        ) {
             timer = setTimeout(flush, CONTINUE_DELAY);
         }
     }
@@ -610,16 +663,27 @@
      * a background declaration may refer to one with var().
      */
     function inlineBackground(cssText) {
-        return String(cssText || '').split(';').map(function (declaration) {
-            const colon = declaration.indexOf(':');
-            if (colon === -1) {
-                return '';
-            }
-            const property = declaration.slice(0, colon).trim().toLowerCase();
-            if (property === BACKGROUND_IMAGE) return '';
-            return property === 'background' || property.indexOf('background-') === 0 ||
-                    property.indexOf('--') === 0 ? declaration.trim() : '';
-        }).filter(Boolean).sort().join(';');
+        return String(cssText || '')
+            .split(';')
+            .map(function (declaration) {
+                const colon = declaration.indexOf(':');
+                if (colon === -1) {
+                    return '';
+                }
+                const property = declaration
+                    .slice(0, colon)
+                    .trim()
+                    .toLowerCase();
+                if (property === BACKGROUND_IMAGE) return '';
+                return property === 'background' ||
+                    property.indexOf('background-') === 0 ||
+                    property.indexOf('--') === 0
+                    ? declaration.trim()
+                    : '';
+            })
+            .filter(Boolean)
+            .sort()
+            .join(';');
     }
 
     function onMutations(records) {
@@ -645,7 +709,9 @@
             }
             if (record.attributeName === 'style') {
                 const before = inlineBackground(record.oldValue);
-                const after = inlineBackground(record.target.getAttribute('style'));
+                const after = inlineBackground(
+                    record.target.getAttribute('style')
+                );
                 // Inline styles change every frame on things like a volume
                 // slider or a progress bar. Ignore those unless a background
                 // declaration (or a custom property it can use) changed.
@@ -683,7 +749,7 @@
         // Shadow roots are often attached, and backgrounds often applied, after
         // the first pass. Each root found is watched from then on; these
         // rescans are what finds the ones attached later.
-        window.addEventListener('load', rescan, {once: true});
+        window.addEventListener('load', rescan, { once: true });
         [500, 2000, 5000].forEach(function (delay) {
             delayed.push(setTimeout(rescan, delay));
         });
@@ -693,10 +759,13 @@
         if (!root || !root.querySelectorAll) {
             return;
         }
-        root.querySelectorAll('[' + CLEAR + '],[' + PROBE + '],[' + GRADIENT + ']').forEach(function (element) {
+        root.querySelectorAll(
+            '[' + CLEAR + '],[' + PROBE + '],[' + GRADIENT + ']'
+        ).forEach(function (element) {
             element.removeAttribute(CLEAR);
             element.removeAttribute(PROBE);
-            if (element.hasAttribute(GRADIENT)) element.style.removeProperty(BACKGROUND_IMAGE);
+            if (element.hasAttribute(GRADIENT))
+                element.style.removeProperty(BACKGROUND_IMAGE);
             element.removeAttribute(GRADIENT);
         });
     }
@@ -779,6 +848,6 @@
     if (document.documentElement) {
         start();
     } else {
-        document.addEventListener('DOMContentLoaded', start, {once: true});
+        document.addEventListener('DOMContentLoaded', start, { once: true });
     }
 })();

@@ -17,7 +17,7 @@ const CRC_TABLE = (function () {
     for (let i = 0; i < 256; i++) {
         let c = i;
         for (let k = 0; k < 8; k++) {
-            c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+            c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
         }
         table[i] = c;
     }
@@ -27,7 +27,7 @@ const CRC_TABLE = (function () {
 function crc32(buffer) {
     let c = -1;
     for (let i = 0; i < buffer.length; i++) {
-        c = CRC_TABLE[(c ^ buffer[i]) & 0xFF] ^ (c >>> 8);
+        c = CRC_TABLE[(c ^ buffer[i]) & 0xff] ^ (c >>> 8);
     }
     return (c ^ -1) >>> 0;
 }
@@ -44,7 +44,7 @@ export function writeZip(out, files) {
     for (const file of files) {
         const name = Buffer.from(file.name.split('\\').join('/'), 'utf8');
         const content = fs.readFileSync(file.path);
-        const deflated = zlib.deflateRawSync(content, {level: 9});
+        const deflated = zlib.deflateRawSync(content, { level: 9 });
         // A file that deflates to more than it was is stored as it is.
         const stored = deflated.length >= content.length;
         const body = stored ? content : deflated;

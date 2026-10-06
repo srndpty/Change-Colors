@@ -20,12 +20,19 @@ function candidates() {
         process.env.LOCALAPPDATA
     ].filter(Boolean);
     for (const base of programFiles) {
-        found.push(path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+        found.push(
+            path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe')
+        );
         found.push(path.join(base, 'Chromium', 'Application', 'chrome.exe'));
     }
     found.push('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
     found.push('/Applications/Chromium.app/Contents/MacOS/Chromium');
-    for (const binary of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']) {
+    for (const binary of [
+        'google-chrome',
+        'google-chrome-stable',
+        'chromium',
+        'chromium-browser'
+    ]) {
         found.push(path.join('/usr/bin', binary));
         found.push(path.join('/usr/local/bin', binary));
         found.push(path.join('/snap/bin', binary));
@@ -42,13 +49,15 @@ export function findChrome() {
     if (process.env.CHROME) {
         return fs.existsSync(process.env.CHROME) ? process.env.CHROME : null;
     }
-    return candidates().find(function (candidate) {
-        try {
-            return fs.statSync(candidate).isFile();
-        } catch (e) {
-            return false;
-        }
-    }) || null;
+    return (
+        candidates().find(function (candidate) {
+            try {
+                return fs.statSync(candidate).isFile();
+            } catch (e) {
+                return false;
+            }
+        }) || null
+    );
 }
 
 /**
@@ -60,7 +69,9 @@ export function findChrome() {
 export function skipWithoutChrome(what) {
     if (process.env.REQUIRE_BROWSER) {
         console.log(`FAIL  ${what}: no Chrome or Chromium was found, and`);
-        console.log('      $REQUIRE_BROWSER says this one had to run. Point $CHROME at one.');
+        console.log(
+            '      $REQUIRE_BROWSER says this one had to run. Point $CHROME at one.'
+        );
         process.exit(1);
     }
     console.log(`SKIP  ${what}: no Chrome or Chromium was found.`);

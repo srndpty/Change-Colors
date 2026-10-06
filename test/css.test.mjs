@@ -2,15 +2,19 @@
 // the page must be recolored, while everything a site stacks on top of its own
 // content - video overlays, banner headlines, ripple layers over a menu entry -
 // must stay see-through instead of covering what is underneath.
-import {spawn} from 'node:child_process';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {findChrome, reportLaunchFailure, skipWithoutChrome} from './browser.mjs';
-import {DEFAULTS} from '../common/settings.js';
-import {buildCss, buildShadowCss} from '../common/css.js';
+import { fileURLToPath } from 'node:url';
+import {
+    findChrome,
+    reportLaunchFailure,
+    skipWithoutChrome
+} from './browser.mjs';
+import { DEFAULTS } from '../common/settings.js';
+import { buildCss, buildShadowCss } from '../common/css.js';
 
 const CHROME = findChrome();
 if (!CHROME) {
@@ -84,53 +88,70 @@ const PAGE = `<!doctype html><html><head><style>
 </script>
 </body></html>`;
 
-const PIXEL = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64');
-const server = http.createServer((req, res) => {
-    if (req.url === '/hero.gif') {
-        res.writeHead(200, {'Content-Type': 'image/gif'});
-        res.end(PIXEL);
-        return;
-    }
-    res.writeHead(200, {'Content-Type': 'text/html'});
-    res.end(PAGE);
-}).listen(PORT);
+const PIXEL = Buffer.from(
+    'R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==',
+    'base64'
+);
+const server = http
+    .createServer((req, res) => {
+        if (req.url === '/hero.gif') {
+            res.writeHead(200, { 'Content-Type': 'image/gif' });
+            res.end(PIXEL);
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(PAGE);
+    })
+    .listen(PORT);
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-css-'));
-const chrome = spawn(CHROME, [
-    '--headless=new',
-    '--remote-debugging-pipe',
-    `--user-data-dir=${profile}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    `http://localhost:${PORT}/`
-], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
+const chrome = spawn(
+    CHROME,
+    [
+        '--headless=new',
+        '--remote-debugging-pipe',
+        `--user-data-dir=${profile}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        `http://localhost:${PORT}/`
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] }
+);
 reportLaunchFailure(chrome, CHROME, () => server.close());
 
 let nextId = 0;
 const pending = new Map();
 let buffer = Buffer.alloc(0);
-chrome.stdio[4].on('data', chunk => {
+chrome.stdio[4].on('data', (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     let end;
     while ((end = buffer.indexOf(0)) !== -1) {
         const raw = buffer.subarray(0, end).toString();
         buffer = buffer.subarray(end + 1);
         const msg = JSON.parse(raw);
-        if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+        if (msg.id && pending.has(msg.id)) {
+            pending.get(msg.id)(msg);
+            pending.delete(msg.id);
+        }
     }
 });
 function send(method, params = {}, sessionId) {
     const id = ++nextId;
-    const m = {id, method, params};
+    const m = { id, method, params };
     if (sessionId) m.sessionId = sessionId;
     chrome.stdio[3].write(JSON.stringify(m) + '\0');
-    return new Promise(r => pending.set(id, r));
+    return new Promise((r) => pending.set(id, r));
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function evaluate(sessionId, expression) {
-    const r = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true}, sessionId);
-    if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails.exception));
+    const r = await send(
+        'Runtime.evaluate',
+        { expression, awaitPromise: true, returnByValue: true },
+        sessionId
+    );
+    if (r.result.exceptionDetails)
+        throw new Error(JSON.stringify(r.result.exceptionDetails.exception));
     return r.result.result.value;
 }
 
@@ -138,7 +159,11 @@ const results = [];
 function check(name, actual, expected) {
     const ok = actual === expected;
     results.push(ok);
-    console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (ok ? '' : `  -> got ${actual}, expected ${expected}`));
+    console.log(
+        (ok ? 'PASS  ' : 'FAIL  ') +
+            name +
+            (ok ? '' : `  -> got ${actual}, expected ${expected}`)
+    );
 }
 
 const DARK = 'rgb(8, 8, 8)';
@@ -150,37 +175,94 @@ try {
     let page = null;
     for (let i = 0; i < 20 && !page; i++) {
         const t = await send('Target.getTargets');
-        page = (t.result.targetInfos || []).find(x => x.type === 'page' && x.url.startsWith('http://localhost'));
+        page = (t.result.targetInfos || []).find(
+            (x) => x.type === 'page' && x.url.startsWith('http://localhost')
+        );
         if (!page) await sleep(500);
     }
-    const {result: {sessionId}} = await send('Target.attachToTarget', {targetId: page.targetId, flatten: true});
+    const {
+        result: { sessionId }
+    } = await send('Target.attachToTarget', {
+        targetId: page.targetId,
+        flatten: true
+    });
     await send('Runtime.enable', {}, sessionId);
 
-    const bg = id => evaluate(sessionId, `getComputedStyle(document.getElementById(${JSON.stringify(id)})).backgroundColor`);
-    const color = id => evaluate(sessionId, `getComputedStyle(document.getElementById(${JSON.stringify(id)})).color`);
+    const bg = (id) =>
+        evaluate(
+            sessionId,
+            `getComputedStyle(document.getElementById(${JSON.stringify(id)})).backgroundColor`
+        );
+    const color = (id) =>
+        evaluate(
+            sessionId,
+            `getComputedStyle(document.getElementById(${JSON.stringify(id)})).color`
+        );
 
-    const settings = Object.assign({}, DEFAULTS, {DefaultBrowserFont: false, OverrideFontName: 'Georgia', FontSize: '14'});
+    const settings = Object.assign({}, DEFAULTS, {
+        DefaultBrowserFont: false,
+        OverrideFontName: 'Georgia',
+        FontSize: '14'
+    });
     const css = buildCss(settings);
 
-    const parsed = await evaluate(sessionId, `(() => {
+    const parsed = await evaluate(
+        sessionId,
+        `(() => {
         const style = document.createElement('style');
         style.textContent = ${JSON.stringify(css)};
         document.head.appendChild(style);
         return style.sheet.cssRules.length;
-    })()`);
-    check('every rule in the generated stylesheet parses', parsed, css.split('}').length - 1);
+    })()`
+    );
+    check(
+        'every rule in the generated stylesheet parses',
+        parsed,
+        css.split('}').length - 1
+    );
 
     /* --------------------------------------------- stylesheet on its own */
 
-    check('body background', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), DARK);
+    check(
+        'body background',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.body).backgroundColor'
+        ),
+        DARK
+    );
     check('heading text color', await color('h'), TEXT);
     check('link color', await color('a'), 'rgb(46, 121, 219)');
-    check('site !important rule on an id is overridden', await color('stubborn'), TEXT);
-    check('site !important background on an id is overridden', await bg('stubborn'), DARK);
-    check('font override applied', await evaluate(sessionId, 'getComputedStyle(document.body).fontFamily'), 'Georgia, sans-serif');
-    check('font size override applied', await evaluate(sessionId, 'getComputedStyle(document.body).fontSize'), '18.6667px');
-    check('hero background image survives',
-        (await evaluate(sessionId, 'getComputedStyle(document.getElementById("hero")).backgroundImage')).startsWith('url('), true);
+    check(
+        'site !important rule on an id is overridden',
+        await color('stubborn'),
+        TEXT
+    );
+    check(
+        'site !important background on an id is overridden',
+        await bg('stubborn'),
+        DARK
+    );
+    check(
+        'font override applied',
+        await evaluate(sessionId, 'getComputedStyle(document.body).fontFamily'),
+        'Georgia, sans-serif'
+    );
+    check(
+        'font size override applied',
+        await evaluate(sessionId, 'getComputedStyle(document.body).fontSize'),
+        '18.6667px'
+    );
+    check(
+        'hero background image survives',
+        (
+            await evaluate(
+                sessionId,
+                'getComputedStyle(document.getElementById("hero")).backgroundImage'
+            )
+        ).startsWith('url('),
+        true
+    );
     // Without the agent everything is painted, which is what keeps a page
     // readable when the agent cannot run.
     check('without the agent, elements are painted', await bg('ripple'), DARK);
@@ -189,75 +271,215 @@ try {
 
     /* ------------------------------------------------------- with the agent */
 
-    const agentSource = fs.readFileSync(fileURLToPath(new URL('../agent.js', import.meta.url)), 'utf8');
+    const agentSource = fs.readFileSync(
+        fileURLToPath(new URL('../agent.js', import.meta.url)),
+        'utf8'
+    );
     await evaluate(sessionId, agentSource);
-    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
+    await evaluate(
+        sessionId,
+        `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`
+    );
     await sleep(1000);
 
-    const image = id => evaluate(sessionId, 'getComputedStyle(document.getElementById(' + JSON.stringify(id) + ')).backgroundImage');
-    check('gradient override is off by default', DEFAULTS.OverrideGradients, false);
-    check('default settings preserve gradients', (await image('gradient')).startsWith('linear-gradient('), true);
+    const image = (id) =>
+        evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById(' +
+                JSON.stringify(id) +
+                ')).backgroundImage'
+        );
+    check(
+        'gradient override is off by default',
+        DEFAULTS.OverrideGradients,
+        false
+    );
+    check(
+        'default settings preserve gradients',
+        (await image('gradient')).startsWith('linear-gradient('),
+        true
+    );
     settings.OverrideGradients = true;
-    await evaluate(sessionId, `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`);
-    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, true)`);
+    await evaluate(
+        sessionId,
+        `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`
+    );
+    await evaluate(
+        sessionId,
+        `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, true)`
+    );
     await sleep(300);
     check('linear gradient is removed', await image('gradient'), 'none');
-    check('gradient surface keeps the chosen background', await bg('gradient'), DARK);
-    check('repeating conic gradient is removed', await image('conicGradient'), 'none');
-    check('mixed backgrounds preserve the image layer and its position',
-        (await image('mixedGradient')).startsWith('none, url('), true);
-    await evaluate(sessionId, 'document.body.style.backgroundImage = "linear-gradient(white, gray)"');
+    check(
+        'gradient surface keeps the chosen background',
+        await bg('gradient'),
+        DARK
+    );
+    check(
+        'repeating conic gradient is removed',
+        await image('conicGradient'),
+        'none'
+    );
+    check(
+        'mixed backgrounds preserve the image layer and its position',
+        (await image('mixedGradient')).startsWith('none, url('),
+        true
+    );
+    await evaluate(
+        sessionId,
+        'document.body.style.backgroundImage = "linear-gradient(white, gray)"'
+    );
     await sleep(300);
-    check('body gradient assigned later is removed', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundImage'), 'none');
-    await evaluate(sessionId, 'document.getElementById("gradient").style.backgroundImage = "url(/hero.gif)"');
+    check(
+        'body gradient assigned later is removed',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.body).backgroundImage'
+        ),
+        'none'
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("gradient").style.backgroundImage = "url(/hero.gif)"'
+    );
     await sleep(300);
-    check('changing a gradient into an image restores the image', (await image('gradient')).startsWith('url('), true);
+    check(
+        'changing a gradient into an image restores the image',
+        (await image('gradient')).startsWith('url('),
+        true
+    );
     settings.OverrideGradients = false;
-    await evaluate(sessionId, `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`);
-    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, false)`);
+    await evaluate(
+        sessionId,
+        `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`
+    );
+    await evaluate(
+        sessionId,
+        `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, false)`
+    );
     await sleep(300);
-    check('turning the option off restores gradients', (await image('conicGradient')).startsWith('repeating-conic-gradient('), true);
-    check('turning it off removes gradient tags', await evaluate(sessionId, 'document.querySelectorAll("[data-changecolors-gradient]").length'), 0);
+    check(
+        'turning the option off restores gradients',
+        (await image('conicGradient')).startsWith('repeating-conic-gradient('),
+        true
+    );
+    check(
+        'turning it off removes gradient tags',
+        await evaluate(
+            sessionId,
+            'document.querySelectorAll("[data-changecolors-gradient]").length'
+        ),
+        0
+    );
     settings.OverrideGradients = true;
-    await evaluate(sessionId, `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`);
-    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, true)`);
+    await evaluate(
+        sessionId,
+        `document.head.querySelector('style:last-of-type').textContent = ${JSON.stringify(buildCss(settings))}`
+    );
+    await evaluate(
+        sessionId,
+        `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))}, true, true)`
+    );
     await sleep(300);
 
-    check('transparent overlay over a label is cleared', await bg('ripple'), CLEAR);
-    check('transparent overlay over a video is cleared', await bg('videoOverlay'), CLEAR);
+    check(
+        'transparent overlay over a label is cleared',
+        await bg('ripple'),
+        CLEAR
+    );
+    check(
+        'transparent overlay over a video is cleared',
+        await bg('videoOverlay'),
+        CLEAR
+    );
     check('video element stays unpainted', await bg('v'), CLEAR);
-    check('a player container with its own background keeps one', await bg('player'), DARK);
-    check('the label under it keeps its color', await color('entryLabel'), TEXT);
+    check(
+        'a player container with its own background keeps one',
+        await bg('player'),
+        DARK
+    );
+    check(
+        'the label under it keeps its color',
+        await color('entryLabel'),
+        TEXT
+    );
     check('headline over a banner is cleared', await bg('heroText'), CLEAR);
-    check('element with a solid background keeps the chosen one', await bg('menu'), DARK);
-    check('an element whose id the specificity padding names is overridden too',
-        await bg('changecolors-a'), DARK);
+    check(
+        'element with a solid background keeps the chosen one',
+        await bg('menu'),
+        DARK
+    );
+    check(
+        'an element whose id the specificity padding names is overridden too',
+        await bg('changecolors-a'),
+        DARK
+    );
     check('and its text as well', await color('changecolors-a'), TEXT);
     check('translucent overlay is cleared', await bg('scrim'), CLEAR);
-    check('a solid background written as oklch() is kept, not cleared', await bg('modern'), DARK);
-    check('a translucent oklch() background is cleared', await bg('modernScrim'), CLEAR);
-    check('body keeps the chosen background', await evaluate(sessionId, 'getComputedStyle(document.body).backgroundColor'), DARK);
+    check(
+        'a solid background written as oklch() is kept, not cleared',
+        await bg('modern'),
+        DARK
+    );
+    check(
+        'a translucent oklch() background is cleared',
+        await bg('modernScrim'),
+        CLEAR
+    );
+    check(
+        'body keeps the chosen background',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.body).backgroundColor'
+        ),
+        DARK
+    );
 
     // A change shortly after the initial scan must not be lost. This guards a
     // previous throttle that skipped the mutation without retrying it later.
-    await evaluate(sessionId, 'document.getElementById("dynamic").style.backgroundColor = "#fff"');
+    await evaluate(
+        sessionId,
+        'document.getElementById("dynamic").style.backgroundColor = "#fff"'
+    );
     await sleep(400);
-    check('a newly assigned inline background is remeasured', await bg('dynamic'), DARK);
-    await evaluate(sessionId, 'document.getElementById("dynamic").style.removeProperty("background-color")');
+    check(
+        'a newly assigned inline background is remeasured',
+        await bg('dynamic'),
+        DARK
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("dynamic").style.removeProperty("background-color")'
+    );
     await sleep(400);
-    check('removing an inline background makes the element clear again', await bg('dynamic'), CLEAR);
+    check(
+        'removing an inline background makes the element clear again',
+        await bg('dynamic'),
+        CLEAR
+    );
 
     // Dynamically added content is measured too.
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         const el = document.createElement('div');
         el.id = 'late';
         el.innerHTML = '<span id="lateSolid" style="background:#fff">solid</span>' +
             '<span id="lateClear">no background</span>';
         document.body.appendChild(el);
-    })()`);
+    })()`
+    );
     await sleep(800);
-    check('content added later, with a background, is painted', await bg('lateSolid'), DARK);
-    check('content added later, without one, is cleared', await bg('lateClear'), CLEAR);
+    check(
+        'content added later, with a background, is painted',
+        await bg('lateSolid'),
+        DARK
+    );
+    check(
+        'content added later, without one, is cleared',
+        await bg('lateClear'),
+        CLEAR
+    );
 
     /* -------------------------------------------- more at once than a flush */
 
@@ -269,14 +491,21 @@ try {
     //
     // A flush runs to completion, so the marks are read from the agent rather
     // than sampled from outside.
-    const agentPending = reset => evaluate(sessionId,
-        `JSON.stringify(window.__changeColorsAgent.pending(${reset ? 'true' : 'false'}))`);
+    const agentPending = (reset) =>
+        evaluate(
+            sessionId,
+            `JSON.stringify(window.__changeColorsAgent.pending(${reset ? 'true' : 'false'}))`
+        );
     const idle = async (timeout = 20000) => {
         const until = Date.now() + timeout;
         for (;;) {
             const state = JSON.parse(await agentPending(false));
-            if ((state.roots === 0 && state.elements === 0 && state.walks === 0) ||
-                    Date.now() > until) {
+            if (
+                (state.roots === 0 &&
+                    state.elements === 0 &&
+                    state.walks === 0) ||
+                Date.now() > until
+            ) {
                 return state;
             }
             await sleep(100);
@@ -287,7 +516,9 @@ try {
     await agentPending(true);
 
     const ROOTS = 20000;
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         // Added straight to the body, so each one is a root of its own to
         // anything watching the document rather than one subtree with many
         // children in it.
@@ -299,42 +530,77 @@ try {
             batch.appendChild(item);
         }
         document.body.appendChild(batch);
-    })()`);
+    })()`
+    );
     const flood = await idle();
 
-    check('no flush takes more subtrees off the waiting list than it may',
-        flood.maxRootsFromPending <= flood.limits.rootsPerFlush, true);
-    check('and it took the most it may', flood.maxRootsFromPending,
-        flood.limits.rootsPerFlush);
-    check('the ones it left are left where they wait, not looked at',
-        flood.maxRootsSeen <= flood.limits.rootsPerFlush + 1, true);
-    check('all of it is measured in the end', await evaluate(sessionId,
-        `document.querySelectorAll('div.flood[data-changecolors-clear]').length`), ROOTS);
+    check(
+        'no flush takes more subtrees off the waiting list than it may',
+        flood.maxRootsFromPending <= flood.limits.rootsPerFlush,
+        true
+    );
+    check(
+        'and it took the most it may',
+        flood.maxRootsFromPending,
+        flood.limits.rootsPerFlush
+    );
+    check(
+        'the ones it left are left where they wait, not looked at',
+        flood.maxRootsSeen <= flood.limits.rootsPerFlush + 1,
+        true
+    );
+    check(
+        'all of it is measured in the end',
+        await evaluate(
+            sessionId,
+            `document.querySelectorAll('div.flood[data-changecolors-clear]').length`
+        ),
+        ROOTS
+    );
 
     /* ------------------------------------------ a flood of elements to recheck */
 
     // Restyling what is already there is the other way in: every one of these is
     // an element to look at again, not a subtree to walk.
     await agentPending(true);
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         document.querySelectorAll('div.flood').forEach((el, i) => {
             el.style.backgroundColor = i % 2 ? '#123456' : '#654321';
         });
-    })()`);
+    })()`
+    );
     const restyled = await idle();
 
-    check('no flush takes on more elements than it may',
-        restyled.maxElementsTaken <= restyled.limits.perFlush, true);
-    check('and it took the most it may', restyled.maxElementsTaken,
-        restyled.limits.perFlush);
-    check('the ones it left are left where they wait, not looked at',
-        restyled.maxElementsSeen <= restyled.limits.perFlush + 1, true);
+    check(
+        'no flush takes on more elements than it may',
+        restyled.maxElementsTaken <= restyled.limits.perFlush,
+        true
+    );
+    check(
+        'and it took the most it may',
+        restyled.maxElementsTaken,
+        restyled.limits.perFlush
+    );
+    check(
+        'the ones it left are left where they wait, not looked at',
+        restyled.maxElementsSeen <= restyled.limits.perFlush + 1,
+        true
+    );
     // Each of them now has a background of its own, so none of them is cleared.
-    check('and every one of them is measured again in the end', await evaluate(sessionId,
-        `document.querySelectorAll('div.flood:not([data-changecolors-clear])').length`),
-        ROOTS);
-    await evaluate(sessionId,
-        `document.querySelectorAll('div.flood').forEach(el => el.remove())`);
+    check(
+        'and every one of them is measured again in the end',
+        await evaluate(
+            sessionId,
+            `document.querySelectorAll('div.flood:not([data-changecolors-clear])').length`
+        ),
+        ROOTS
+    );
+    await evaluate(
+        sessionId,
+        `document.querySelectorAll('div.flood').forEach(el => el.remove())`
+    );
     await idle();
 
     /* --------------------------------------- a flood of shadow roots in one go */
@@ -344,7 +610,9 @@ try {
     // queue may hold is what says the limit is kept where they are queued.
     const HOSTS = 6000;
     await agentPending(true);
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         const host = document.createElement('div');
         host.id = 'hosts';
         for (let i = 0; i < ${HOSTS}; i++) {
@@ -354,24 +622,44 @@ try {
             host.appendChild(item);
         }
         document.body.appendChild(host);
-    })()`);
+    })()`
+    );
     const hosts = await idle();
 
-    check('the queue of subtrees never grows past what it may hold',
-        hosts.maxWalks <= hosts.limits.queuedWalks, true);
-    check('and it really was pushed that far',
-        hosts.maxWalks, hosts.limits.queuedWalks);
-    check('every shadow tree in it is styled', await evaluate(sessionId, `(() => {
+    check(
+        'the queue of subtrees never grows past what it may hold',
+        hosts.maxWalks <= hosts.limits.queuedWalks,
+        true
+    );
+    check(
+        'and it really was pushed that far',
+        hosts.maxWalks,
+        hosts.limits.queuedWalks
+    );
+    check(
+        'every shadow tree in it is styled',
+        await evaluate(
+            sessionId,
+            `(() => {
         const all = [...document.querySelectorAll('#hosts .host')];
         return all.filter(el => getComputedStyle(el.shadowRoot.querySelector('span')).color
             === 'rgb(232, 232, 232)').length;
-    })()`), HOSTS);
-    check('and nothing is left waiting',
-        `${hosts.roots}/${hosts.elements}/${hosts.walks}`, '0/0/0');
+    })()`
+        ),
+        HOSTS
+    );
+    check(
+        'and nothing is left waiting',
+        `${hosts.roots}/${hosts.elements}/${hosts.walks}`,
+        '0/0/0'
+    );
     // Two shadow trees were on the page before this: the widget and the one
     // nested inside it.
-    check('and every one of them is held, along with the two already there',
-        `${hosts.styledRoots}/${hosts.observedRoots}`, `${HOSTS + 2}/${HOSTS + 2}`);
+    check(
+        'and every one of them is held, along with the two already there',
+        `${hosts.styledRoots}/${hosts.observedRoots}`,
+        `${HOSTS + 2}/${HOSTS + 2}`
+    );
 
     // A sweep answers the removals that were known when it started. One that
     // happens while it runs - a host it has already walked past being taken out
@@ -388,18 +676,26 @@ try {
             await sleep(100);
         }
     };
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         // A removal of something that is not a host, to set a sweep going.
         const decoy = document.createElement('div');
         document.body.appendChild(decoy);
         decoy.remove();
-    })()`);
+    })()`
+    );
     await sleep(250);
-    await evaluate(sessionId,
-        `document.querySelector('#hosts .host').remove()`);
+    await evaluate(
+        sessionId,
+        `document.querySelector('#hosts .host').remove()`
+    );
     const overtaken = await held(HOSTS + 1);
-    check('a tree the sweep has already walked past is still let go of',
-        overtaken.styledRoots, HOSTS + 1);
+    check(
+        'a tree the sweep has already walked past is still let go of',
+        overtaken.styledRoots,
+        HOSTS + 1
+    );
 
     // Holding a shadow tree means holding its host and everything under it. A
     // page that rebuilds its components - which is what a long-lived single
@@ -407,52 +703,91 @@ try {
     // itself if what it holds were only ever added to.
     await evaluate(sessionId, `document.getElementById('hosts').remove()`);
     const dropped = await held(2);
-    check('taking them out of the page makes the agent let go of them',
-        `${dropped.styledRoots}/${dropped.observedRoots}`, '2/2');
+    check(
+        'taking them out of the page makes the agent let go of them',
+        `${dropped.styledRoots}/${dropped.observedRoots}`,
+        '2/2'
+    );
     // And letting go of one is not losing it: a host put back in the page is
     // walked again like anything else added to it.
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         const item = document.createElement('div');
         item.id = 'detachable';
         item.attachShadow({mode: 'open'}).innerHTML = '<span id="back">back</span>';
         window.__detached = item;
         document.body.appendChild(item);
-    })()`);
+    })()`
+    );
     await sleep(600);
     await evaluate(sessionId, `document.getElementById('detachable').remove()`);
     await sleep(600);
     await evaluate(sessionId, 'document.body.appendChild(window.__detached)');
     await sleep(800);
-    check('a shadow tree put back in the page is styled again', await evaluate(sessionId,
-        `getComputedStyle(document.getElementById('detachable').shadowRoot.getElementById('back')).color`),
-        TEXT);
+    check(
+        'a shadow tree put back in the page is styled again',
+        await evaluate(
+            sessionId,
+            `getComputedStyle(document.getElementById('detachable').shadowRoot.getElementById('back')).color`
+        ),
+        TEXT
+    );
     await evaluate(sessionId, `document.getElementById('detachable').remove()`);
     await sleep(600);
 
-    check('and the trees still in the page are still styled',
-        await evaluate(sessionId, `getComputedStyle(${'document.getElementById("widget").shadowRoot.getElementById("shadowText")'}).color`),
-        TEXT);
+    check(
+        'and the trees still in the page are still styled',
+        await evaluate(
+            sessionId,
+            `getComputedStyle(${'document.getElementById("widget").shadowRoot.getElementById("shadowText")'}).color`
+        ),
+        TEXT
+    );
     await idle();
 
     /* ----------------------------------------------------------- shadow DOM */
 
-    const shadowText = 'document.getElementById("widget").shadowRoot.getElementById("shadowText")';
-    const shadowOverlay = 'document.getElementById("widget").shadowRoot.getElementById("shadowOverlay")';
-    const nestedText = 'document.getElementById("widget").shadowRoot.getElementById("nested").shadowRoot.getElementById("nestedText")';
+    const shadowText =
+        'document.getElementById("widget").shadowRoot.getElementById("shadowText")';
+    const shadowOverlay =
+        'document.getElementById("widget").shadowRoot.getElementById("shadowOverlay")';
+    const nestedText =
+        'document.getElementById("widget").shadowRoot.getElementById("nested").shadowRoot.getElementById("nestedText")';
 
-    check('shadow tree text takes the chosen color',
-        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), TEXT);
-    check('shadow tree element with a background is painted',
-        await evaluate(sessionId, `getComputedStyle(${shadowText}).backgroundColor`), DARK);
-    check('shadow tree element without one is cleared',
-        await evaluate(sessionId, `getComputedStyle(${shadowOverlay}).backgroundColor`), CLEAR);
+    check(
+        'shadow tree text takes the chosen color',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`),
+        TEXT
+    );
+    check(
+        'shadow tree element with a background is painted',
+        await evaluate(
+            sessionId,
+            `getComputedStyle(${shadowText}).backgroundColor`
+        ),
+        DARK
+    );
+    check(
+        'shadow tree element without one is cleared',
+        await evaluate(
+            sessionId,
+            `getComputedStyle(${shadowOverlay}).backgroundColor`
+        ),
+        CLEAR
+    );
     check('shadow host background is painted', await bg('widget'), DARK);
-    check('nested shadow tree is styled too',
-        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), TEXT);
+    check(
+        'nested shadow tree is styled too',
+        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`),
+        TEXT
+    );
 
     // Changes inside a shadow tree are invisible to an observer watching the
     // document, so each root found is watched itself.
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         const root = document.getElementById('widget').shadowRoot;
         // Appended, not innerHTML +=, which would rebuild the nested host and
         // take its shadow root with it.
@@ -463,34 +798,74 @@ try {
         lateClear.id = 'shadowLateClear';
         root.appendChild(late);
         root.appendChild(lateClear);
-    })()`);
+    })()`
+    );
     await sleep(800);
-    check('content added later inside a shadow tree, with a background, is painted',
-        await evaluate(sessionId, 'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLate")).backgroundColor'), DARK);
-    check('content added later inside a shadow tree, without one, is cleared',
-        await evaluate(sessionId, 'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLateClear")).backgroundColor'), CLEAR);
+    check(
+        'content added later inside a shadow tree, with a background, is painted',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLate")).backgroundColor'
+        ),
+        DARK
+    );
+    check(
+        'content added later inside a shadow tree, without one, is cleared',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("widget").shadowRoot.getElementById("shadowLateClear")).backgroundColor'
+        ),
+        CLEAR
+    );
 
     /* ------------------------------------------- restyling from an ancestor */
 
-    check('a descendant with no background of its own starts cleared', await bg('themed'), CLEAR);
-    await evaluate(sessionId, 'document.getElementById("theme").className = "dark"');
+    check(
+        'a descendant with no background of its own starts cleared',
+        await bg('themed'),
+        CLEAR
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("theme").className = "dark"'
+    );
     await sleep(600);
-    check('a class on an ancestor is remeasured down the subtree', await bg('themed'), DARK);
-    await evaluate(sessionId, 'document.getElementById("theme").className = ""');
+    check(
+        'a class on an ancestor is remeasured down the subtree',
+        await bg('themed'),
+        DARK
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("theme").className = ""'
+    );
     await sleep(600);
     check('removing it clears the descendant again', await bg('themed'), CLEAR);
 
-    check('a descendant reading an empty custom property starts cleared', await bg('varChild'), CLEAR);
-    await evaluate(sessionId, 'document.getElementById("varHost").style.setProperty("--surface", "#ffffff")');
+    check(
+        'a descendant reading an empty custom property starts cleared',
+        await bg('varChild'),
+        CLEAR
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("varHost").style.setProperty("--surface", "#ffffff")'
+    );
     await sleep(600);
-    check('a custom property set on an ancestor is remeasured down the subtree', await bg('varChild'), DARK);
+    check(
+        'a custom property set on an ancestor is remeasured down the subtree',
+        await bg('varChild'),
+        DARK
+    );
 
     /* ------------------------------------------------- more than one flush */
 
     // A subtree bigger than one flush's budget must be finished by the next
     // flush, not dropped: the last elements of a big page are exactly the ones
     // a "measure the first few thousand" implementation lost.
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         const big = document.createElement('div');
         big.id = 'big';
         const parts = [];
@@ -500,25 +875,66 @@ try {
         }
         big.innerHTML = parts.join('');
         document.body.appendChild(big);
-    })()`);
+    })()`
+    );
     await sleep(3000);
-    check('an element past the first flush, with a background, is painted', await bg('big8999'), DARK);
-    check('an element past the first flush, without one, is cleared', await bg('big8998'), CLEAR);
-    check('every element of a 9000 element subtree was measured', await evaluate(sessionId,
-        'document.querySelectorAll("#big > div[data-changecolors-clear]").length'), 4500);
+    check(
+        'an element past the first flush, with a background, is painted',
+        await bg('big8999'),
+        DARK
+    );
+    check(
+        'an element past the first flush, without one, is cleared',
+        await bg('big8998'),
+        CLEAR
+    );
+    check(
+        'every element of a 9000 element subtree was measured',
+        await evaluate(
+            sessionId,
+            'document.querySelectorAll("#big > div[data-changecolors-clear]").length'
+        ),
+        4500
+    );
     await evaluate(sessionId, 'document.getElementById("big").remove()');
 
     /* ---------------------------------------------------------- turning off */
 
     await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
-    check('stopping restores the original gradient', (await image('conicGradient')).startsWith('repeating-conic-gradient('), true);
-    check('stopping removes gradient tags', await evaluate(sessionId, 'document.querySelectorAll("[data-changecolors-gradient]").length'), 0);
-    check('stopping the agent removes its attributes', await evaluate(sessionId,
-        'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
-    check('stopping the agent removes them inside shadow trees too', await evaluate(sessionId,
-        'document.getElementById("widget").shadowRoot.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
-    check('stopping the agent restores shadow tree colors',
-        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
+    check(
+        'stopping restores the original gradient',
+        (await image('conicGradient')).startsWith('repeating-conic-gradient('),
+        true
+    );
+    check(
+        'stopping removes gradient tags',
+        await evaluate(
+            sessionId,
+            'document.querySelectorAll("[data-changecolors-gradient]").length'
+        ),
+        0
+    );
+    check(
+        'stopping the agent removes its attributes',
+        await evaluate(
+            sessionId,
+            'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'
+        ),
+        0
+    );
+    check(
+        'stopping the agent removes them inside shadow trees too',
+        await evaluate(
+            sessionId,
+            'document.getElementById("widget").shadowRoot.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'
+        ),
+        0
+    );
+    check(
+        'stopping the agent restores shadow tree colors',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`),
+        'rgb(15, 15, 15)'
+    );
 
     /* ------------------------------------------- stopping right after starting */
 
@@ -527,27 +943,58 @@ try {
     // override is switched off - the page can have been handed to another agent
     // by then.
     await evaluate(sessionId, agentSource);
-    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`);
+    await evaluate(
+        sessionId,
+        `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(settings))})`
+    );
     await evaluate(sessionId, 'window.__changeColorsAgent.stop()');
     await sleep(6000);
-    check('an agent stopped before its delayed rescans stays stopped', await evaluate(sessionId,
-        'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'), 0);
-    check('and leaves no stylesheet in a shadow tree behind',
-        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`), 'rgb(15, 15, 15)');
-    check('and none in a nested one either',
-        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`), 'rgb(15, 15, 15)');
+    check(
+        'an agent stopped before its delayed rescans stays stopped',
+        await evaluate(
+            sessionId,
+            'document.querySelectorAll("[data-changecolors-clear],[data-changecolors-probe]").length'
+        ),
+        0
+    );
+    check(
+        'and leaves no stylesheet in a shadow tree behind',
+        await evaluate(sessionId, `getComputedStyle(${shadowText}).color`),
+        'rgb(15, 15, 15)'
+    );
+    check(
+        'and none in a nested one either',
+        await evaluate(sessionId, `getComputedStyle(${nestedText}).color`),
+        'rgb(15, 15, 15)'
+    );
 
     /* -------------------------------------------------------- hiding images */
 
-    const hidden = buildCss(Object.assign({}, DEFAULTS, {ShowImage: false}));
-    await evaluate(sessionId, `(() => {
+    const hidden = buildCss(Object.assign({}, DEFAULTS, { ShowImage: false }));
+    await evaluate(
+        sessionId,
+        `(() => {
         const style = document.createElement('style');
         style.textContent = ${JSON.stringify(hidden)};
         document.head.appendChild(style);
-    })()`);
-    check('images can be hidden', await evaluate(sessionId, 'getComputedStyle(document.getElementById("img")).display'), 'none');
-    check('hiding images also drops CSS background images',
-        await evaluate(sessionId, 'getComputedStyle(document.getElementById("hero")).backgroundImage'), 'none');
+    })()`
+    );
+    check(
+        'images can be hidden',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("img")).display'
+        ),
+        'none'
+    );
+    check(
+        'hiding images also drops CSS background images',
+        await evaluate(
+            sessionId,
+            'getComputedStyle(document.getElementById("hero")).backgroundImage'
+        ),
+        'none'
+    );
 } catch (e) {
     console.log('FAIL  test run -> ' + e);
     results.push(false);

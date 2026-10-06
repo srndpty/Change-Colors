@@ -1,61 +1,53 @@
-body
-{  
-  font-family: "Arial";
-  background-color: #F7F7F7;
+body {
+    font-family: 'Arial';
+    background-color: #f7f7f7;
 }
 
-.action_btn
-{  
-  color: #191919;
-  margin-top: 2px;
-  padding-top: 3px;
-  padding-left: 10px;
-  font-size: 10pt;
-  width: 200px;
-  height: 20px;
-  background-color: #F7F7F7;
-  border: 1px solid #CFCFCF;
-  cursor:pointer;
+.action_btn {
+    color: #191919;
+    margin-top: 2px;
+    padding-top: 3px;
+    padding-left: 10px;
+    font-size: 10pt;
+    width: 200px;
+    height: 20px;
+    background-color: #f7f7f7;
+    border: 1px solid #cfcfcf;
+    cursor: pointer;
 }
 
-.action_btn:hover
-{  
-  color: #fff;
-  background-image: url("../icons/overrideSelection.jpg");
+.action_btn:hover {
+    color: #fff;
+    background-image: url('../icons/overrideSelection.jpg');
 }
-#buttons
-{
-  display: flex;
-  flex-direction: column;
+#buttons {
+    display: flex;
+    flex-direction: column;
 }
 
-button.action_btn
-{
-  display: block;
-  box-sizing: content-box;
-  text-align: left;
-  font-family: inherit;
+button.action_btn {
+    display: block;
+    box-sizing: content-box;
+    text-align: left;
+    font-family: inherit;
 }
 
 #unsupported,
-#failed
-{
-  color: #191919;
-  font-size: 10pt;
-  width: 200px;
-  padding: 5px;
+#failed {
+    color: #191919;
+    font-size: 10pt;
+    width: 200px;
+    padding: 5px;
 }
 
 /* Shown when a change could not be handed to the service worker. Nothing was
    written, so the buttons above are still showing what is stored. */
-#failed
-{
-  color: #8a1f1f;
+#failed {
+    color: #8a1f1f;
 }
 
-#footer
-{
-  margin-top: 8px;
-  font-size: 9pt;
-  text-align: right;
+#footer {
+    margin-top: 8px;
+    font-size: 9pt;
+    text-align: right;
 }

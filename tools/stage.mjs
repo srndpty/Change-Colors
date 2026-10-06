@@ -13,7 +13,7 @@
 // thought of.
 import fs from 'node:fs';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = path.join(ROOT, 'build');
@@ -49,7 +49,7 @@ const SHIPPED = [
     'icons/selectBackground.jpg'
 ];
 
-fs.rmSync(OUT, {recursive: true, force: true});
+fs.rmSync(OUT, { recursive: true, force: true });
 let bytes = 0;
 for (const file of SHIPPED) {
     const from = path.join(ROOT, file);
@@ -58,7 +58,7 @@ for (const file of SHIPPED) {
         process.exit(1);
     }
     const to = path.join(OUT, file);
-    fs.mkdirSync(path.dirname(to), {recursive: true});
+    fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.copyFileSync(from, to);
     bytes += fs.statSync(to).size;
 }
@@ -66,7 +66,9 @@ for (const file of SHIPPED) {
 // Whatever the manifest names has to be in the list, or the extension is
 // staged broken: this catches the file added to the manifest and forgotten
 // here.
-const manifest = JSON.parse(fs.readFileSync(path.join(OUT, 'manifest.json'), 'utf8'));
+const manifest = JSON.parse(
+    fs.readFileSync(path.join(OUT, 'manifest.json'), 'utf8')
+);
 const named = new Set();
 (function collect(value) {
     if (typeof value === 'string') {
@@ -83,9 +85,13 @@ const missing = [...named].filter(function (file) {
     return !fs.existsSync(path.join(OUT, file));
 });
 if (missing.length) {
-    console.error('the manifest names files that were not staged: ' + missing.join(', '));
+    console.error(
+        'the manifest names files that were not staged: ' + missing.join(', ')
+    );
     process.exit(1);
 }
 
-console.log(`staged ${SHIPPED.length} files (${Math.round(bytes / 1024)} kB) in build/`);
+console.log(
+    `staged ${SHIPPED.length} files (${Math.round(bytes / 1024)} kB) in build/`
+);
 console.log('`npm run release` is what turns it into the ZIP the store takes.');

@@ -1,42 +1,42 @@
 {
-	"manifest_version": 3,
-	"name": "Change Colors",
-	"version": "3.0.0",
-	"description": "Customize web page colors, fonts, images, and link styles for more comfortable reading.",
-	"icons": {
-		"16": "icons/colors_icons.png",
-		"32": "icons/colors_icons.png",
-		"48": "icons/colors_icons.png",
-		"128": "icons/colors_icons.png"
-	},
-	"action": {
-		"default_icon": "icons/colors_icons.png",
-		"default_title": "Change Colors",
-		"default_popup": "popup.html"
-	},
-	"background": {
-		"service_worker": "background.js",
-		"type": "module"
-	},
-	"options_ui": {
-		"page": "options.html",
-		"open_in_tab": true
-	},
-	"commands": {
-		"override-page": {
-			"suggested_key": { "default": "Ctrl+Shift+P" },
-			"description": "Apply or remove the override on the current page"
-		},
-		"override-domain": {
-			"suggested_key": { "default": "Ctrl+Shift+D" },
-			"description": "Apply or remove the override on the current domain"
-		},
-		"override-all": {
-			"suggested_key": { "default": "Ctrl+Shift+G" },
-			"description": "Apply or remove the override on all pages"
-		}
-	},
-	"permissions": ["storage", "scripting", "webNavigation", "offscreen"],
-	"host_permissions": ["<all_urls>"],
-	"minimum_chrome_version": "109"
+    "manifest_version": 3,
+    "name": "Change Colors",
+    "version": "3.0.0",
+    "description": "Customize web page colors, fonts, images, and link styles for more comfortable reading.",
+    "icons": {
+        "16": "icons/colors_icons.png",
+        "32": "icons/colors_icons.png",
+        "48": "icons/colors_icons.png",
+        "128": "icons/colors_icons.png"
+    },
+    "action": {
+        "default_icon": "icons/colors_icons.png",
+        "default_title": "Change Colors",
+        "default_popup": "popup.html"
+    },
+    "background": {
+        "service_worker": "background.js",
+        "type": "module"
+    },
+    "options_ui": {
+        "page": "options.html",
+        "open_in_tab": true
+    },
+    "commands": {
+        "override-page": {
+            "suggested_key": { "default": "Ctrl+Shift+P" },
+            "description": "Apply or remove the override on the current page"
+        },
+        "override-domain": {
+            "suggested_key": { "default": "Ctrl+Shift+D" },
+            "description": "Apply or remove the override on the current domain"
+        },
+        "override-all": {
+            "suggested_key": { "default": "Ctrl+Shift+G" },
+            "description": "Apply or remove the override on all pages"
+        }
+    },
+    "permissions": ["storage", "scripting", "webNavigation", "offscreen"],
+    "host_permissions": ["<all_urls>"],
+    "minimum_chrome_version": "109"
 }

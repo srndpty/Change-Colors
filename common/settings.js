@@ -8,11 +8,16 @@
  */
 
 export const DEFAULTS = {
+    /** @type {string[]} */
     OverridenDomains: [],
+    /** @type {string[]} */
     OverridenPages: [],
+    /** @type {string[]} */
     NotOverridenDomains: [],
+    /** @type {string[]} */
     NotOverridenPages: [],
     OverrideAll: false,
+    /** @type {string[]} */
     CustomFonts: [],
     DefaultBrowserFont: true,
     DefaultBrowserColor: false,
@@ -27,10 +32,14 @@ export const DEFAULTS = {
     OverrideFontName: 'Arial'
 };
 
+/** @typedef {typeof DEFAULTS} Settings */
+
+/** @returns {Promise<Settings>} */
 export function getSettings() {
     return chrome.storage.local.get(DEFAULTS);
 }
 
+/** @param {Partial<Settings>} patch */
 export function saveSettings(patch) {
     return chrome.storage.local.set(patch);
 }
@@ -59,18 +68,23 @@ let changes = Promise.resolve();
  * saves nothing.
  */
 export function updateSettings(change) {
-    const done = changes.then(function () {
-        return null;
-    }, function () {
-        return null;
-    }).then(async function () {
-        const settings = await getSettings();
-        const patch = change(settings);
-        if (patch) {
-            await saveSettings(patch);
-        }
-        return patch;
-    });
+    const done = changes
+        .then(
+            function () {
+                return null;
+            },
+            function () {
+                return null;
+            }
+        )
+        .then(async function () {
+            const settings = await getSettings();
+            const patch = change(settings);
+            if (patch) {
+                await saveSettings(patch);
+            }
+            return patch;
+        });
     // The chain must not be broken by a change that threw, and must not carry
     // its rejection to whoever queues next.
     changes = done.catch(function () {});
@@ -85,13 +99,18 @@ function withEntry(list, value, present) {
     return present
         ? list.concat([value])
         : list.filter(function (entry) {
-            return entry !== value;
-        });
+              return entry !== value;
+          });
 }
 
 /** Pages we are allowed to (and want to) restyle. */
 export function isSupportedUrl(url) {
-    return typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('file://'));
+    return (
+        typeof url === 'string' &&
+        (url.startsWith('http://') ||
+            url.startsWith('https://') ||
+            url.startsWith('file://'))
+    );
 }
 
 export function extractDomain(url) {
@@ -128,6 +147,7 @@ function scopeSetting(on, off) {
  * actually mean it. (Manifest V2 let any inclusion beat any exclusion, so a
  * page turned on individually stayed on afterwards no matter what was pressed.)
  */
+/** @param {Settings} settings @param {string} url */
 export function getOverrideState(settings, url) {
     const domain = extractDomain(url);
     const state = {
@@ -140,12 +160,14 @@ export function getOverrideState(settings, url) {
         OverrideAll: Boolean(settings.OverrideAll)
     };
     state.page = scopeSetting(state.OverridenPages, state.NotOverridenPages);
-    state.domainSetting = scopeSetting(state.OverridenDomains, state.NotOverridenDomains);
+    state.domainSetting = scopeSetting(
+        state.OverridenDomains,
+        state.NotOverridenDomains
+    );
     // What each scope's button is offering to change: what this domain does
     // where nothing is said about the page, and what this page does in the end.
-    state.domainActive = state.domainSetting === null
-        ? state.OverrideAll
-        : state.domainSetting;
+    state.domainActive =
+        state.domainSetting === null ? state.OverrideAll : state.domainSetting;
     state.active = state.page === null ? state.domainActive : state.page;
     return state;
 }
@@ -162,19 +184,31 @@ export function getOverrideState(settings, url) {
  */
 function overridePatch(state, scope, want) {
     if (scope === 'all') {
-        return {OverrideAll: want};
+        return { OverrideAll: want };
     }
     if (scope === 'domain') {
         const explicit = want !== state.OverrideAll;
         return {
-            OverridenDomains: withEntry(state.domains.on, state.domain, explicit && want),
-            NotOverridenDomains: withEntry(state.domains.off, state.domain, explicit && !want)
+            OverridenDomains: withEntry(
+                state.domains.on,
+                state.domain,
+                explicit && want
+            ),
+            NotOverridenDomains: withEntry(
+                state.domains.off,
+                state.domain,
+                explicit && !want
+            )
         };
     }
     const explicit = want !== state.domainActive;
     return {
         OverridenPages: withEntry(state.pages.on, state.url, explicit && want),
-        NotOverridenPages: withEntry(state.pages.off, state.url, explicit && !want)
+        NotOverridenPages: withEntry(
+            state.pages.off,
+            state.url,
+            explicit && !want
+        )
     };
 }
 
@@ -187,8 +221,14 @@ export function isScope(scope) {
 
 function stateWithLists(settings, url) {
     const state = getOverrideState(settings, url);
-    state.pages = {on: settings.OverridenPages, off: settings.NotOverridenPages};
-    state.domains = {on: settings.OverridenDomains, off: settings.NotOverridenDomains};
+    state.pages = {
+        on: settings.OverridenPages,
+        off: settings.NotOverridenPages
+    };
+    state.domains = {
+        on: settings.OverridenDomains,
+        off: settings.NotOverridenDomains
+    };
     return state;
 }
 
@@ -206,7 +246,11 @@ export function setOverride(scope, url, active) {
         return Promise.reject(new Error('unknown scope: ' + scope));
     }
     return updateSettings(function (settings) {
-        return overridePatch(stateWithLists(settings, url), scope, Boolean(active));
+        return overridePatch(
+            stateWithLists(settings, url),
+            scope,
+            Boolean(active)
+        );
     });
 }
 
@@ -268,7 +312,7 @@ export async function requestOverrideChange(scope, url, active) {
                 setTimeout(resolve, 100);
             });
         }
-        let answer = null;
+        let answer;
         try {
             answer = await chrome.runtime.sendMessage(message);
         } catch (e) {

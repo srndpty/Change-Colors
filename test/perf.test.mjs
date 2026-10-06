@@ -10,15 +10,19 @@
 // changing every frame, and - the shape that gets handed to the page agent in
 // the largest pieces - hundreds of separate subtrees appearing at once and
 // hundreds of separate elements being restyled at once.
-import {spawn} from 'node:child_process';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {findChrome, reportLaunchFailure, skipWithoutChrome} from './browser.mjs';
-import {DEFAULTS} from '../common/settings.js';
-import {buildCss, buildShadowCss} from '../common/css.js';
+import { fileURLToPath } from 'node:url';
+import {
+    findChrome,
+    reportLaunchFailure,
+    skipWithoutChrome
+} from './browser.mjs';
+import { DEFAULTS } from '../common/settings.js';
+import { buildCss, buildShadowCss } from '../common/css.js';
 
 const CHROME = findChrome();
 if (!CHROME) {
@@ -102,49 +106,73 @@ body { background:#fff; color:#111; font: 13px sans-serif; margin:0 }
 </script>
 </body></html>`;
 
-const server = http.createServer((req, res) => {
-    res.writeHead(200, {'Content-Type': 'text/html'});
-    res.end(PAGE);
-}).listen(PORT);
+const server = http
+    .createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(PAGE);
+    })
+    .listen(PORT);
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-perf-'));
-const chrome = spawn(CHROME, [
-    '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
-    '--window-size=1280,900', '--hide-scrollbars',
-    '--no-first-run', '--no-default-browser-check', `http://localhost:${PORT}/`
-], {stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']});
+const chrome = spawn(
+    CHROME,
+    [
+        '--headless=new',
+        '--remote-debugging-pipe',
+        `--user-data-dir=${profile}`,
+        '--window-size=1280,900',
+        '--hide-scrollbars',
+        '--no-first-run',
+        '--no-default-browser-check',
+        `http://localhost:${PORT}/`
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] }
+);
 reportLaunchFailure(chrome, CHROME, () => server.close());
 
 let nextId = 0;
 const pending = new Map();
 let buffer = Buffer.alloc(0);
-chrome.stdio[4].on('data', chunk => {
+chrome.stdio[4].on('data', (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     let end;
     while ((end = buffer.indexOf(0)) !== -1) {
         const raw = buffer.subarray(0, end).toString();
         buffer = buffer.subarray(end + 1);
         const msg = JSON.parse(raw);
-        if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+        if (msg.id && pending.has(msg.id)) {
+            pending.get(msg.id)(msg);
+            pending.delete(msg.id);
+        }
     }
 });
 function send(method, params = {}, sessionId) {
     const id = ++nextId;
-    const m = {id, method, params};
+    const m = { id, method, params };
     if (sessionId) m.sessionId = sessionId;
     chrome.stdio[3].write(JSON.stringify(m) + '\0');
-    return new Promise(r => pending.set(id, r));
+    return new Promise((r) => pending.set(id, r));
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function evaluate(sessionId, expression) {
-    const r = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true}, sessionId);
-    if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300));
+    const r = await send(
+        'Runtime.evaluate',
+        { expression, awaitPromise: true, returnByValue: true },
+        sessionId
+    );
+    if (r.result.exceptionDetails)
+        throw new Error(
+            JSON.stringify(r.result.exceptionDetails.exception).slice(0, 300)
+        );
     return r.result.result.value;
 }
 async function costSeconds(sessionId) {
     const r = await send('Performance.getMetrics', {}, sessionId);
-    const value = name => r.result.metrics.find(m => m.name === name).value;
-    return {recalc: value('RecalcStyleDuration'), script: value('ScriptDuration')};
+    const value = (name) => r.result.metrics.find((m) => m.name === name).value;
+    return {
+        recalc: value('RecalcStyleDuration'),
+        script: value('ScriptDuration')
+    };
 }
 
 let failed = false;
@@ -153,10 +181,17 @@ try {
     let page = null;
     for (let i = 0; i < 30 && !page; i++) {
         const t = await send('Target.getTargets');
-        page = (t.result.targetInfos || []).find(x => x.type === 'page' && x.url.startsWith('http://localhost'));
+        page = (t.result.targetInfos || []).find(
+            (x) => x.type === 'page' && x.url.startsWith('http://localhost')
+        );
         if (!page) await sleep(400);
     }
-    const {result: {sessionId}} = await send('Target.attachToTarget', {targetId: page.targetId, flatten: true});
+    const {
+        result: { sessionId }
+    } = await send('Target.attachToTarget', {
+        targetId: page.targetId,
+        flatten: true
+    });
     await send('Runtime.enable', {}, sessionId);
     await send('Performance.enable', {}, sessionId);
     await sleep(2000);
@@ -165,13 +200,25 @@ try {
     await sleep(WINDOW);
     const baseEnd = await costSeconds(sessionId);
 
-    await evaluate(sessionId, `(() => {
+    await evaluate(
+        sessionId,
+        `(() => {
         const s = document.createElement('style');
         s.textContent = ${JSON.stringify(buildCss(DEFAULTS))};
         document.documentElement.appendChild(s);
-    })()`);
-    await evaluate(sessionId, fs.readFileSync(fileURLToPath(new URL('../agent.js', import.meta.url)), 'utf8'));
-    await evaluate(sessionId, `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(DEFAULTS))})`);
+    })()`
+    );
+    await evaluate(
+        sessionId,
+        fs.readFileSync(
+            fileURLToPath(new URL('../agent.js', import.meta.url)),
+            'utf8'
+        )
+    );
+    await evaluate(
+        sessionId,
+        `window.__changeColorsAgent.setCss(${JSON.stringify(buildShadowCss(DEFAULTS))})`
+    );
     await sleep(2000);
 
     const styledStart = await costSeconds(sessionId);
@@ -181,18 +228,29 @@ try {
     const results = [];
     function report(what, baseline, styled, budget) {
         const extra = styled - baseline;
-        console.log(`${what} over ${WINDOW / 1000}s: ` +
-            `${baseline.toFixed(3)}s without the extension, ${styled.toFixed(3)}s with it ` +
-            `(+${extra.toFixed(3)}s)`);
+        console.log(
+            `${what} over ${WINDOW / 1000}s: ` +
+                `${baseline.toFixed(3)}s without the extension, ${styled.toFixed(3)}s with it ` +
+                `(+${extra.toFixed(3)}s)`
+        );
         const ok = extra < budget;
         results.push(ok);
-        console.log((ok ? 'PASS  ' : 'FAIL  ') +
-            `extra ${what} stays under ${budget}s`);
+        console.log(
+            (ok ? 'PASS  ' : 'FAIL  ') + `extra ${what} stays under ${budget}s`
+        );
     }
-    report('style recalculation', baseEnd.recalc - baseStart.recalc,
-        styledEnd.recalc - styledStart.recalc, MAX_EXTRA_RECALC_SECONDS);
-    report('script time', baseEnd.script - baseStart.script,
-        styledEnd.script - styledStart.script, MAX_EXTRA_SCRIPT_SECONDS);
+    report(
+        'style recalculation',
+        baseEnd.recalc - baseStart.recalc,
+        styledEnd.recalc - styledStart.recalc,
+        MAX_EXTRA_RECALC_SECONDS
+    );
+    report(
+        'script time',
+        baseEnd.script - baseStart.script,
+        styledEnd.script - styledStart.script,
+        MAX_EXTRA_SCRIPT_SECONDS
+    );
     failed = results.includes(false);
 } catch (e) {
     console.log('FAIL  perf run -> ' + e);

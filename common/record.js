@@ -56,7 +56,7 @@
  */
 
 /** What a page gets when nothing is meant to be applied to it. */
-export const NOTHING = {css: null, shadowCss: null, probe: false};
+export const NOTHING = { css: null, shadowCss: null, probe: false };
 
 export function readRecord(value) {
     return {
@@ -70,9 +70,11 @@ export function readRecord(value) {
 }
 
 export function isEmpty(record) {
-    return !Object.keys(record.decisions).length &&
+    return (
+        !Object.keys(record.decisions).length &&
         !Object.keys(record.pages).length &&
-        !Object.keys(record.documents).length;
+        !Object.keys(record.documents).length
+    );
 }
 
 function textAt(record, index) {

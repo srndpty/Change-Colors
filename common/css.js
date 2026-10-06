@@ -29,8 +29,12 @@ export const PROBE_ATTRIBUTE = 'data-changecolors-probe';
 
 const NOT_PROBED = ':not([' + PROBE_ATTRIBUTE + '])';
 
-const DOCUMENT_SCOPE = {root: 'html > body', prefix: 'html > body ', host: null};
-const SHADOW_SCOPE = {root: ':host', prefix: '', host: ':host'};
+const DOCUMENT_SCOPE = {
+    root: 'html > body',
+    prefix: 'html > body ',
+    host: null
+};
+const SHADOW_SCOPE = { root: ':host', prefix: '', host: ':host' };
 
 /**
  * Specificity padding.
@@ -50,21 +54,27 @@ const SHADOW_SCOPE = {root: ':host', prefix: '', host: ':host'};
  * out of the override.
  */
 const BOOST = ':not(#changecolors-a#changecolors-b#changecolors-c)';
-const BOOST_OVER_BASE = ':not(#changecolors-a#changecolors-b#changecolors-c#changecolors-d)';
+const BOOST_OVER_BASE =
+    ':not(#changecolors-a#changecolors-b#changecolors-c#changecolors-d)';
 
 /**
  * Quotes a font family name for CSS. Settings saved by older versions already
  * contain the surrounding single quotes, so they are stripped first.
  */
 export function cssFontFamily(name) {
-    const clean = String(name || 'Arial').trim().replace(/^['"]|['"]$/g, '').replace(/["\\;{}]/g, '');
+    const clean = String(name || 'Arial')
+        .trim()
+        .replace(/^['"]|['"]$/g, '')
+        .replace(/["\\;{}]/g, '');
     return '"' + clean + '", sans-serif';
 }
 
 function prefixed(scope, selectors, boost) {
-    return selectors.map(function (selector) {
-        return scope.prefix + selector + (boost || BOOST);
-    }).join(',');
+    return selectors
+        .map(function (selector) {
+            return scope.prefix + selector + (boost || BOOST);
+        })
+        .join(',');
 }
 
 /**
@@ -83,21 +93,34 @@ function mediaGuard(scope) {
 
 /** Elements agent.js found to have no background of their own. */
 function clearedSelectors(scope) {
-    let css = prefixed(scope, ['[' + CLEAR_ATTRIBUTE + ']' + NOT_PROBED], BOOST_OVER_BASE);
+    let css = prefixed(
+        scope,
+        ['[' + CLEAR_ATTRIBUTE + ']' + NOT_PROBED],
+        BOOST_OVER_BASE
+    );
     if (scope.host) {
-        css += ',:host([' + CLEAR_ATTRIBUTE + '])' + NOT_PROBED + BOOST_OVER_BASE;
+        css +=
+            ',:host([' + CLEAR_ATTRIBUTE + '])' + NOT_PROBED + BOOST_OVER_BASE;
     }
     return css;
 }
 
 function linkSelectors(scope, state) {
-    return prefixed(scope, [
-        'a:' + state, 'a:' + state + ' *',
-        'a:' + state + ':hover', 'a:' + state + ':hover *',
-        'a:' + state + ':active', 'a:' + state + ':active *'
-    ], BOOST_OVER_BASE);
+    return prefixed(
+        scope,
+        [
+            'a:' + state,
+            'a:' + state + ' *',
+            'a:' + state + ':hover',
+            'a:' + state + ':hover *',
+            'a:' + state + ':active',
+            'a:' + state + ':active *'
+        ],
+        BOOST_OVER_BASE
+    );
 }
 
+/** @param {import('./settings.js').Settings} settings */
 function build(settings, scope) {
     // The page frame always keeps the chosen background; only elements inside it
     // can be cleared again.
@@ -108,28 +131,64 @@ function build(settings, scope) {
     if (!settings.DefaultBrowserColor) {
         if (settings.OverrideGradients) {
             const gradient = '[data-changecolors-gradient]' + NOT_PROBED;
-            css += prefixed(scope, [gradient], BOOST_OVER_BASE) +
-                (scope.host ? ',:host([data-changecolors-gradient])' + NOT_PROBED + BOOST_OVER_BASE :
-                    ',html' + gradient + BOOST_OVER_BASE + ',html > body' + gradient + BOOST_OVER_BASE) +
+            css +=
+                prefixed(scope, [gradient], BOOST_OVER_BASE) +
+                (scope.host
+                    ? ',:host([data-changecolors-gradient])' +
+                      NOT_PROBED +
+                      BOOST_OVER_BASE
+                    : ',html' +
+                      gradient +
+                      BOOST_OVER_BASE +
+                      ',html > body' +
+                      gradient +
+                      BOOST_OVER_BASE) +
                 '{background-image: var(--changecolors-background-image, none) !important;}';
         }
-        css += frame + ',' + inside + '{' +
-            'background-color: #' + settings.background_color + ' !important;' +
-            'color: #' + settings.text_color + ' !important;' +
+        css +=
+            frame +
+            ',' +
+            inside +
+            '{' +
+            'background-color: #' +
+            settings.background_color +
+            ' !important;' +
+            'color: #' +
+            settings.text_color +
+            ' !important;' +
             'text-shadow: none !important;' +
             '-webkit-text-fill-color: currentcolor !important;}' +
-            clearedSelectors(scope) + '{background-color: transparent !important;}' +
-            linkSelectors(scope, 'link') + '{color: #' + settings.links_color + ' !important;}' +
-            linkSelectors(scope, 'visited') + '{color: #' + settings.visited_links_color + ' !important;}' +
-            mediaGuard(scope) + '{background-color: transparent !important;}';
+            clearedSelectors(scope) +
+            '{background-color: transparent !important;}' +
+            linkSelectors(scope, 'link') +
+            '{color: #' +
+            settings.links_color +
+            ' !important;}' +
+            linkSelectors(scope, 'visited') +
+            '{color: #' +
+            settings.visited_links_color +
+            ' !important;}' +
+            mediaGuard(scope) +
+            '{background-color: transparent !important;}';
     }
 
     if (!settings.DefaultBrowserFont) {
         const fontSize = parseInt(settings.FontSize, 10) || 0;
-        css += scope.root + BOOST + ',' + scope.prefix + '*' + BOOST + '{' +
+        css +=
+            scope.root +
+            BOOST +
+            ',' +
+            scope.prefix +
+            '*' +
+            BOOST +
+            '{' +
             'line-height: normal !important;' +
-            'font-family: ' + cssFontFamily(settings.OverrideFontName) + ' !important;' +
-            (fontSize !== 0 ? 'font-size: ' + fontSize + 'pt !important;' : '') +
+            'font-family: ' +
+            cssFontFamily(settings.OverrideFontName) +
+            ' !important;' +
+            (fontSize !== 0
+                ? 'font-size: ' + fontSize + 'pt !important;'
+                : '') +
             '}';
     }
 
@@ -138,25 +197,35 @@ function build(settings, scope) {
         // other decorative images would survive as element backgrounds.
         // Clickable elements keep theirs, because that is often the only thing
         // marking a button or an icon.
-        css += prefixed(scope, ['img']) + '{display: none !important;}' +
-            scope.root + BOOST + ',' +
-            scope.prefix + '*:not([onclick]):not(:link):not(:visited)' + BOOST +
+        css +=
+            prefixed(scope, ['img']) +
+            '{display: none !important;}' +
+            scope.root +
+            BOOST +
+            ',' +
+            scope.prefix +
+            '*:not([onclick]):not(:link):not(:visited)' +
+            BOOST +
             '{background-image: none !important;}';
     }
 
     if (!settings.ShowFlash) {
-        css += prefixed(scope, ['object', 'embed']) + '{display: none !important;}';
+        css +=
+            prefixed(scope, ['object', 'embed']) +
+            '{display: none !important;}';
     }
 
     return css;
 }
 
 /** Stylesheet for the document. */
+/** @param {import('./settings.js').Settings} settings */
 export function buildCss(settings) {
     return build(settings, DOCUMENT_SCOPE);
 }
 
 /** The same rules, written to be adopted by a shadow root. */
+/** @param {import('./settings.js').Settings} settings */
 export function buildShadowCss(settings) {
     return build(settings, SHADOW_SCOPE);
 }
@@ -169,9 +238,14 @@ export function buildShadowCss(settings) {
  * unless the agent adopts the rules into it. Someone who keeps the page colors
  * and only changes the font still needs it.
  */
+/** @param {import('./settings.js').Settings} settings */
 export function needsPageAgent(settings) {
-    return !settings.DefaultBrowserColor || !settings.DefaultBrowserFont ||
-        !settings.ShowImage || !settings.ShowFlash;
+    return (
+        !settings.DefaultBrowserColor ||
+        !settings.DefaultBrowserFont ||
+        !settings.ShowImage ||
+        !settings.ShowFlash
+    );
 }
 
 /**
@@ -179,6 +253,7 @@ export function needsPageAgent(settings) {
  * the color override paints elements, so a font-only override gets the agent
  * without the cost of measuring the page.
  */
+/** @param {import('./settings.js').Settings} settings */
 export function needsBackgroundProbe(settings) {
     return !settings.DefaultBrowserColor;
 }

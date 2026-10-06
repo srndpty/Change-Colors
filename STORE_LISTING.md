@@ -7,14 +7,14 @@ Some of the listing comes out of the package and some is typed into the
 dashboard. The ones that come out of the package cannot be edited there, so a
 change to them means a new ZIP:
 
-| Field in the store   | Comes from                                |
-| -------------------- | ----------------------------------------- |
-| Title                | `manifest.json` `name`                    |
-| Summary              | `manifest.json` `description`             |
-| Version              | `manifest.json` `version`                 |
-| Description          | typed into the dashboard - the text below |
-| Privacy answers      | typed into the dashboard - the text below |
-| Privacy policy URL   | typed into the dashboard - see PRIVACY.md |
+| Field in the store | Comes from                                |
+| ------------------ | ----------------------------------------- |
+| Title              | `manifest.json` `name`                    |
+| Summary            | `manifest.json` `description`             |
+| Version            | `manifest.json` `version`                 |
+| Description        | typed into the dashboard - the text below |
+| Privacy answers    | typed into the dashboard - the text below |
+| Privacy policy URL | typed into the dashboard - see PRIVACY.md |
 
 ## Description
 
@@ -89,15 +89,15 @@ What the extension handles locally still counts as handling it, so it is
 declared. Declaring it is not saying it is sent anywhere; the privacy policy is
 where "locally only" is stated.
 
-* **Web history** - yes. The current URL, and the page URLs and domains the user
+- **Web history** - yes. The current URL, and the page URLs and domains the user
   puts on the override lists.
-* **Website content** - yes. The DOM, computed styles and open shadow trees are
+- **Website content** - yes. The DOM, computed styles and open shadow trees are
   read to decide what to paint and what to leave alone.
-* **User activity** - no. Clicks, keystrokes and scrolling are not recorded.
-* **Personally identifiable information, health, financial, authentication,
+- **User activity** - no. Clicks, keystrokes and scrolling are not recorded.
+- **Personally identifiable information, health, financial, authentication,
   personal communications, location** - no.
-* Do not select the option that says no user data is handled.
-* Certify the Limited Use disclosures. Each is true of this extension: the data
+- Do not select the option that says no user data is handled.
+- Certify the Limited Use disclosures. Each is true of this extension: the data
   is used only for the user-facing feature, is not sold, is not used for
   advertising or creditworthiness, and is not transferred except as the policy
   allows.

@@ -67,7 +67,14 @@ function union(texts, css) {
  * An insert that fails needs no such care. The removals that came before it
  * succeeded, so what the document holds is known exactly: nothing of ours.
  */
-export async function syncDocument(io, documentId, wantedCss, record, present, unsure) {
+export async function syncDocument(
+    io,
+    documentId,
+    wantedCss,
+    record,
+    present,
+    unsure
+) {
     const kept = [];
     let known = true;
     for (const css of present) {
@@ -75,15 +82,18 @@ export async function syncDocument(io, documentId, wantedCss, record, present, u
             kept.push(css);
             continue;
         }
-        if (!await io.removeCss(documentId, css)) {
+        if (!(await io.removeCss(documentId, css))) {
             kept.push(css);
             if (unsure) {
                 known = false;
             }
         }
     }
-    if (wantedCss && !kept.includes(wantedCss) &&
-            await io.insertCss(documentId, wantedCss)) {
+    if (
+        wantedCss &&
+        !kept.includes(wantedCss) &&
+        (await io.insertCss(documentId, wantedCss))
+    ) {
         kept.push(wantedCss);
     }
     setSheets(record, documentId, kept);
@@ -130,7 +140,7 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
         record.pages[id] = pageId;
         claim(record, id, present.get(id), decision.css);
     }
-    if (!await io.save(record)) {
+    if (!(await io.save(record))) {
         // The page is untouched, and that is what the stored record still says.
         return false;
     }
@@ -140,7 +150,14 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
         // back in a known state. The mark this run just made says the same
         // thing to the next worker, not to this one: it has not inserted
         // anything yet, and `present` says so.
-        await syncDocument(io, id, decision.css, record, present.get(id), unsure.get(id));
+        await syncDocument(
+            io,
+            id,
+            decision.css,
+            record,
+            present.get(id),
+            unsure.get(id)
+        );
     }
     await io.save(record);
 
@@ -162,7 +179,7 @@ export async function syncCommittedFrame(io, documentId, pageId, record) {
 
     record.pages[documentId] = pageId;
     claim(record, documentId, present, decision.css);
-    if (!await io.save(record)) {
+    if (!(await io.save(record))) {
         return false;
     }
 

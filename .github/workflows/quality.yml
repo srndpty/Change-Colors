@@ -1,0 +1,45 @@
+name: Quality
+
+on:
+    push:
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    static:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - run: npm ci
+              env:
+                  HUSKY: '0'
+            - run: npm run check
+            - run: npm run stage
+    browser:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - run: npm ci
+              env:
+                  HUSKY: '0'
+            - run: npx playwright install --with-deps chromium
+            - name: Browser tests against source and staged extension
+              shell: bash
+              run: |
+                  export CHROME_UNBRANDED="$(find "$HOME/.cache/ms-playwright" -path '*/chrome-linux*/chrome' -type f | head -n 1)"
+                  test -n "$CHROME_UNBRANDED"
+                  export CHROME="$CHROME_UNBRANDED"
+                  export REQUIRE_BROWSER=1
+                  npm run test:browser
+                  npm run stage
+                  EXTENSION_DIR="$PWD/build" npm run test:integration
