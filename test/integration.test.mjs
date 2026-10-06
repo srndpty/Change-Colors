@@ -604,6 +604,29 @@ try {
         CLEAR
     );
 
+    // Repeat the navigation/storage race on fresh documents. A single run can
+    // miss a native CSS insertion that outlives the redirecting document.
+    for (let trial = 0; trial < 10; trial++) {
+        await settings({ NotOverridenPages: [], background_color: '080808' });
+        await evaluate(
+            sessionId,
+            `location.href = '/?redirect-trial=${trial}'`
+        );
+        sessionId = await openPage(`?redirect-trial=${trial}`);
+        await settles(() => bg('document.body'), DARK);
+        await settings({
+            NotOverridenPages: [`http://localhost:${PORT}/plain`]
+        });
+        await evaluate(sessionId, 'location.href = "/redirect"');
+        await settings({ background_color: '445566' });
+        sessionId = await openPage('/plain');
+        check(
+            `redirect/storage race ${trial + 1} preserves the excluded page`,
+            await settles(() => bg('document.body'), WHITE),
+            WHITE
+        );
+    }
+
     /* ------------------------------------------ back into a restored document */
 
     // A document coming back from the back/forward cache commits again with the

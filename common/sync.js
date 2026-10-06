@@ -38,6 +38,7 @@ import {
     documentsOfPage,
     isUncertain,
     markUncertain,
+    prepareCommittedDocument,
     setDecision,
     setSheets,
     settle,
@@ -131,6 +132,7 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
     const present = new Map();
     const unsure = new Map();
     for (const id of ids) {
+        prepareCommittedDocument(record, id);
         present.set(id, sheetsOf(record, id));
         unsure.set(id, isUncertain(record, id));
     }
@@ -173,6 +175,7 @@ export async function syncPage(io, pageId, decision, record, alsoLive) {
  * back/forward cache still holds the stylesheet and the agent it was left with.
  */
 export async function syncCommittedFrame(io, documentId, pageId, record) {
+    prepareCommittedDocument(record, documentId);
     const decision = decisionFor(record, pageId);
     const present = sheetsOf(record, documentId);
     const unsure = isUncertain(record, documentId);

@@ -191,6 +191,26 @@ export function setSheets(record, documentId, texts) {
     });
 }
 
+/**
+ * A CSS request already dispatched to a frame can finish across its commit.
+ * For an untracked incoming document, conservatively claim every document
+ * stylesheet still known to this tab so synchronization can remove strays.
+ * Removing an absent stylesheet is safe; forgetting a present one is not.
+ */
+export function prepareCommittedDocument(record, documentId) {
+    if (record.documents[documentId]) return;
+    const possible = [
+        ...new Set(
+            Object.values(record.documents)
+                .flat()
+                .map((index) => record.sheets[index])
+        )
+    ];
+    if (!possible.length) return;
+    setSheets(record, documentId, possible);
+    markUncertain(record, documentId);
+}
+
 /** Drops the text of stylesheets nothing refers to any more. */
 export function compact(record) {
     const sheets = [];
