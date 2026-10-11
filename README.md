@@ -9,6 +9,11 @@ Original source: https://github.com/Strav/Change-Colors
 
 ### 3.0.1 - Optional gradient backgrounds and quality checks
 
+- Add experimental "Darken Google Maps", off by default. With color overrides
+  active on Google Maps, it filters the map canvases without filtering photos
+  or the surrounding controls. Roads and markers also change color; this is
+  not Google's native dark theme. Turning it off restores the original map.
+
 - Add "Override gradient backgrounds", off by default. When enabled, CSS
   gradients on elements and their `::before` / `::after` backgrounds are replaced
   with the selected background color, while ordinary image layers stay in place.

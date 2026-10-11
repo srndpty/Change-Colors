@@ -391,7 +391,7 @@ async function wantedFor(url) {
         return { css: null, shadowCss: null, probe: false };
     }
     return {
-        css: buildCss(settings),
+        css: buildCss(settings, url),
         shadowCss: needsPageAgent(settings) ? buildShadowCss(settings) : null,
         probe: needsBackgroundProbe(settings),
         gradients: !settings.DefaultBrowserColor && settings.OverrideGradients

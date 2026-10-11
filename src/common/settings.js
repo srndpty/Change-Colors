@@ -22,6 +22,7 @@ export const DEFAULTS = {
     DefaultBrowserFont: true,
     DefaultBrowserColor: false,
     OverrideGradients: false,
+    DarkGoogleMaps: false,
     text_color: 'E8E8E8',
     background_color: '080808',
     links_color: '2E79DB',

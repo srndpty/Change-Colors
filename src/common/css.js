@@ -254,8 +254,32 @@ function build(settings, scope) {
 
 /** Stylesheet for the document. */
 /** @param {import('./settings.js').Settings} settings */
-export function buildCss(settings) {
-    return build(settings, DOCUMENT_SCOPE);
+export function buildCss(settings, url = '') {
+    let css = build(settings, DOCUMENT_SCOPE);
+    // Maps paints the map into canvases; recoloring their CSS background does
+    // not affect those pixels. Restrict the experimental filter to the map
+    // renderer on Google Maps, leaving photos and the surrounding UI alone.
+    if (settings.DarkGoogleMaps && !settings.DefaultBrowserColor) {
+        try {
+            const page = new URL(url);
+            const googleHost =
+                /(^|\.)google\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$/i;
+            if (
+                page.protocol === 'https:' &&
+                googleHost.test(page.hostname) &&
+                (page.pathname === '/maps' ||
+                    page.pathname.startsWith('/maps/') ||
+                    page.hostname.startsWith('maps.'))
+            ) {
+                css +=
+                    prefixed(DOCUMENT_SCOPE, ['canvas.H1VXrf']) +
+                    '{filter: invert(1) hue-rotate(180deg) brightness(0.85) saturate(0.8) !important;}';
+            }
+        } catch {
+            // No usable page URL: keep the normal stylesheet.
+        }
+    }
+    return css;
 }
 
 /** The same rules, written to be adopted by a shadow root. */

@@ -275,6 +275,73 @@ try {
                 JSON.stringify(id) +
                 ')).backgroundImage'
         );
+    // Map pixels need a filter, but photos and other canvases must keep their
+    // colors. Exercise URL scoping and removing the feature's stylesheet.
+    const mapsUrl =
+        'https://www.google.com/maps/search/Restaurants/@35,139,17z';
+    const mapsSettings = { ...settings, DarkGoogleMaps: true };
+    const mapCss = buildCss(mapsSettings, mapsUrl);
+    check('map filter is off by default', DEFAULTS.DarkGoogleMaps, false);
+    for (const url of [
+        'https://www.google.com/search?q=maps',
+        'https://www.google.com.evil.test/maps/',
+        'https://example.com/maps/',
+        ''
+    ]) {
+        check(
+            'map filter does not apply to ' + (url || 'an unknown URL'),
+            buildCss(mapsSettings, url).includes('filter:'),
+            false
+        );
+    }
+    check(
+        'keeping web page colors disables the map filter',
+        buildCss(
+            { ...mapsSettings, DefaultBrowserColor: true },
+            mapsUrl
+        ).includes('filter:'),
+        false
+    );
+    await evaluate(
+        sessionId,
+        `(() => {
+        for (const [id, className] of [['mapCanvas', 'H1VXrf'], ['otherCanvas', '']]) {
+            const canvas = document.createElement('canvas');
+            canvas.id = id;
+            canvas.className = className;
+            document.body.appendChild(canvas);
+        }
+        const style = document.createElement('style');
+        style.id = 'mapFilterTest';
+        style.textContent = ${JSON.stringify(mapCss)};
+        document.head.appendChild(style);
+    })()`
+    );
+    const filter = (id) =>
+        evaluate(
+            sessionId,
+            `getComputedStyle(document.getElementById(${JSON.stringify(id)})).filter`
+        );
+    check(
+        'map renderer gets the dark filter',
+        (await filter('mapCanvas')).includes('invert(1)'),
+        true
+    );
+    check(
+        'other canvases stay unfiltered',
+        await filter('otherCanvas'),
+        'none'
+    );
+    check('photos stay unfiltered', await filter('img'), 'none');
+    await evaluate(
+        sessionId,
+        'document.getElementById("mapFilterTest").remove()'
+    );
+    check(
+        'turning the feature off restores the map',
+        await filter('mapCanvas'),
+        'none'
+    );
     check(
         'gradient override is off by default',
         DEFAULTS.OverrideGradients,

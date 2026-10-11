@@ -38,7 +38,8 @@ const COLOR_ROWS = [
     'text_color_row',
     'links_color_row',
     'visited_links_color_row',
-    'override_gradients_row'
+    'override_gradients_row',
+    'dark_google_maps_row'
 ];
 const FONT_ROWS = ['fontSelection', 'fontSizeRow'];
 
@@ -71,6 +72,10 @@ function displayColoredMessage(element, message, colorCode) {
 /* ---------------------------------------------------------------- colors */
 
 function initColors() {
+    $('darkGoogleMaps').checked = Boolean(settings.DarkGoogleMaps);
+    $('darkGoogleMaps').addEventListener('change', function () {
+        save({ DarkGoogleMaps: $('darkGoogleMaps').checked });
+    });
     $('overrideGradients').checked = Boolean(settings.OverrideGradients);
     $('overrideGradients').addEventListener('change', function () {
         save({ OverrideGradients: $('overrideGradients').checked });
