@@ -286,6 +286,9 @@ try {
         'https://www.google.com/search?q=maps',
         'https://www.google.com.evil.test/maps/',
         'https://example.com/maps/',
+        'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=35,139',
+        'https://www.google.com/maps/place/Hamburg+Kobo/@35.8921785,139.4924004,15a,75y,256.54h,95.41t/data=!3m7!1e1!3m5!1sdCbvY8bhBVoC_mV7t5DI0g!2e0',
+        'https://www.google.com/maps/@35,139,90y/data=!3m7!1e1!3m5',
         ''
     ]) {
         check(
@@ -311,6 +314,11 @@ try {
             canvas.className = className;
             document.body.appendChild(canvas);
         }
+        const panorama = document.createElement('div');
+        panorama.id = 'panorama';
+        panorama.className = 'dC3P6';
+        panorama.innerHTML = '<div><canvas id="streetCanvas" class="H1VXrf"></canvas></div>';
+        document.body.appendChild(panorama);
         const style = document.createElement('style');
         style.id = 'mapFilterTest';
         style.textContent = ${JSON.stringify(mapCss)};
@@ -333,6 +341,50 @@ try {
         'none'
     );
     check('photos stay unfiltered', await filter('img'), 'none');
+    check(
+        'Street View canvases stay unfiltered',
+        await filter('streetCanvas'),
+        'none'
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("panorama").className = ""'
+    );
+    check(
+        'returning to a map enables the filter',
+        (await filter('streetCanvas')).includes('invert(1)'),
+        true
+    );
+    await evaluate(
+        sessionId,
+        'document.getElementById("panorama").className = "dC3P6"'
+    );
+    check(
+        'switching to Street View removes the filter',
+        await filter('streetCanvas'),
+        'none'
+    );
+    check(
+        'a separate map stays dark beside Street View',
+        (await filter('mapCanvas')).includes('invert(1)'),
+        true
+    );
+    for (const label of ['Street View', 'ストリートビュー']) {
+        await evaluate(
+            sessionId,
+            `(() => {
+            const panorama = document.getElementById('panorama');
+            panorama.className = '';
+            panorama.setAttribute('role', 'application');
+            panorama.setAttribute('aria-label', ${JSON.stringify(label)});
+        })()`
+        );
+        check(
+            'Street View is excluded without its CSS class: ' + label,
+            await filter('streetCanvas'),
+            'none'
+        );
+    }
     await evaluate(
         sessionId,
         'document.getElementById("mapFilterTest").remove()'

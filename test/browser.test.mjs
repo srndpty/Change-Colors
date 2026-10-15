@@ -85,7 +85,7 @@ test('sandbox is disabled only in Linux CI', () => {
 test('worker selection rejects unrelated extensions and wrong versions', () => {
     const expected = {
         name: 'Change Colors',
-        version: '3.0.1',
+        version: '3.0.2',
         manifest_version: 3
     };
     assert.equal(

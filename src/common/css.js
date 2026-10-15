@@ -264,7 +264,14 @@ export function buildCss(settings, url = '') {
             const page = new URL(url);
             const googleHost =
                 /(^|\.)google\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$/i;
+            // Panorama links can retain a place path. Do not emit a map filter
+            // for those URLs, even if Google's DOM classes change.
+            const panoramaUrl =
+                page.searchParams.get('map_action') === 'pano' ||
+                /!1e1(?:!|$)/.test(page.pathname) ||
+                /@[^/]*,\d+(?:\.\d+)?a(?:,|\/|$)/.test(page.pathname);
             if (
+                !panoramaUrl &&
                 page.protocol === 'https:' &&
                 googleHost.test(page.hostname) &&
                 (page.pathname === '/maps' ||
@@ -272,7 +279,11 @@ export function buildCss(settings, url = '') {
                     page.hostname.startsWith('maps.'))
             ) {
                 css +=
-                    prefixed(DOCUMENT_SCOPE, ['canvas.H1VXrf']) +
+                    // Street View shares the canvas class with the map. Its
+                    // panorama container gets dC3P6, including on SPA switches.
+                    prefixed(DOCUMENT_SCOPE, [
+                        'canvas.H1VXrf:not(.dC3P6 canvas):not([role="application"][aria-label="Street View" i] canvas):not([role="application"][aria-label="ストリートビュー"] canvas)'
+                    ]) +
                     '{filter: invert(1) hue-rotate(180deg) brightness(0.85) saturate(0.8) !important;}';
             }
         } catch {

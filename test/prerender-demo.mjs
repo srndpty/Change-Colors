@@ -110,7 +110,7 @@ Serving on http://localhost:${PORT}/
          once, going Back, and repeating from step 3; or check that preloading
          is on in chrome://settings/performance.
 
-       - an entry whose value is its own id, e.g. ["ABC窶ｦ", "ABC窶ｦ"]: correct. The
+       - an entry whose value is its own id, e.g. ["ABC…", "ABC…"]: correct. The
          prerendered page was filed as a page of its own. Its sub frame is
          there too, as an entry pointing at that same id.
 
