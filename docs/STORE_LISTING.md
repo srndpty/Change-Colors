@@ -26,12 +26,12 @@ for a maintainer; none of that is true any more.
 Change Colors customizes the appearance of web pages for easier and more comfortable reading.
 
 Features:
-窶｢ Choose custom background, text, link, and visited-link colors
-窶｢ Choose a preferred font and font size
-窶｢ Show or hide images and embedded content
-窶｢ Apply settings globally, by domain, or to a single page
-窶｢ Toggle overrides from the toolbar or with keyboard shortcuts
-窶｢ Works with frames, dynamic pages, and open Shadow DOM
+• Choose custom background, text, link, and visited-link colors
+• Choose a preferred font and font size
+• Show or hide images and embedded content
+• Apply settings globally, by domain, or to a single page
+• Toggle overrides from the toolbar or with keyboard shortcuts
+• Works with frames, dynamic pages, and open Shadow DOM
 
 Version 3.0 has been rebuilt for Manifest V3 and includes major reliability, compatibility, and performance improvements.
 
