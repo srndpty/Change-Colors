@@ -369,11 +369,31 @@ async function stopAgent(tabId, documentId) {
 }
 
 async function setIcon(tabId, active) {
+    if (closedTabs.has(tabId)) {
+        return;
+    }
     try {
-        await chrome.action.setIcon({
-            tabId: tabId,
-            path: active ? ICON_ON : ICON_OFF
+        // Consume lastError in the callback as well: icon loading is
+        // asynchronous and the tab can disappear before it finishes.
+        await new Promise((resolve, reject) => {
+            chrome.action.setIcon(
+                {
+                    tabId: tabId,
+                    path: active ? ICON_ON : ICON_OFF
+                },
+                function () {
+                    const error = chrome.runtime.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                    } else {
+                        resolve();
+                    }
+                }
+            );
         });
+        if (closedTabs.has(tabId)) {
+            return;
+        }
         await chrome.action.setTitle({
             tabId: tabId,
             title: active ? 'Change Colors (override active)' : 'Change Colors'
